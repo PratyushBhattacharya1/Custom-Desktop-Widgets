@@ -126,6 +126,23 @@ td {
   position: relative;
 }
 
+/* The outgoing grid, fading out over the live one. Decorative only — every
+   click falls through, so the new month is interactive from the first frame.
+   130ms matches the .day cell transition, which is what you're watching. */
+.days-ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+  opacity: 1;
+  transition: opacity 130ms ease;
+}
+
+.days-ghost.is-out {
+  opacity: 0;
+}
+
 .day {
   width: 100%;
   height: 26px;

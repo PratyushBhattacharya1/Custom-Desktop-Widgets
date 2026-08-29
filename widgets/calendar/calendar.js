@@ -19,6 +19,8 @@
     dayView: document.getElementById('day-view'),
     monthView: document.getElementById('month-view'),
     grid: document.getElementById('grid'),
+    daysTable: document.querySelector('#day-view .days'),
+    daysStack: document.querySelector('#day-view .days-stack'),
     monthGrid: document.getElementById('month-grid'),
     events: document.getElementById('events'),
     eventsScroll: document.getElementById('events-scroll'),
@@ -62,7 +64,9 @@
     if (want.y !== state.cursor.y || want.m !== state.cursor.m) return;
     state.month = data;
     renderHeader();
-    renderEvents();
+    // Mid-fade the panel is on its way out; endFade() renders it once, with
+    // this fresher state.month already in place.
+    if (!fadeEventsPending) renderEvents();
   }
 
   function instancesForDay(sel) {
@@ -241,14 +245,107 @@
     el.eventsScroll.style.maxHeight = Math.max(60, Math.round(budget)) + 'px';
   }
 
-  function render() {
+  // ---------------------------------------------------------------- cross-fade
+
+  // A single clone of the outgoing grid fades out on top of the live one, which
+  // stays fully opaque underneath. Cross-fading two half-opaque grids instead
+  // would dip to 75% total alpha mid-way and read as a flicker.
+  let fadeGhost = null;
+  let fadeTimer = null;
+  let fadeEventsPending = false;
+
+  function makeGhost() {
+    const ghost = el.daysTable.cloneNode(true);
+    ghost.classList.add('days-ghost');
+    ghost.setAttribute('aria-hidden', 'true');
+    // The clone carries a duplicate id="grid"; strip it before it enters the DOM.
+    const body = ghost.querySelector('tbody');
+    if (body) body.removeAttribute('id');
+    // pointer-events:none stops clicks, but cloned buttons stay tabbable.
+    const buttons = ghost.querySelectorAll('button');
+    for (let i = 0; i < buttons.length; i++) buttons[i].tabIndex = -1;
+    return ghost;
+  }
+
+  function dropGhost() {
+    if (fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
+    if (!fadeGhost) return;
+    fadeGhost.removeEventListener('transitionend', onFadeEnd);
+    fadeGhost.remove();
+    fadeGhost = null;
+  }
+
+  // Returns whether a renderEvents() was owed, so a burst of clicks collapses
+  // into exactly one deferred render at the end of the last fade.
+  function settleFade() {
+    dropGhost();
+    el.events.classList.remove('is-fading');
+    const owed = fadeEventsPending;
+    fadeEventsPending = false;
+    return owed;
+  }
+
+  function endFade() {
+    if (settleFade()) renderEvents();
+  }
+
+  // transitionend bubbles, and the cloned .day cells carry their own
+  // transitions — so filter on both target and property.
+  function onFadeEnd(e) {
+    if (e.target !== fadeGhost || e.propertyName !== 'opacity') return;
+    endFade();
+  }
+
+  function beginFade(ghost) {
+    dropGhost();
+    fadeGhost = ghost;
+    el.daysStack.appendChild(ghost); // last child paints over the live grid
+    if (el.events.classList.contains('has-content')) {
+      el.events.classList.add('is-fading');
+    }
+    fadeEventsPending = true;
+    void ghost.offsetWidth; // flush, same idiom as pin.js
+    ghost.classList.add('is-out');
+    ghost.addEventListener('transitionend', onFadeEnd);
+    // Net for the case transitionend never arrives (hidden window, etc).
+    fadeTimer = setTimeout(endFade, 400);
+  }
+
+  // Hiding the widget from the tray suspends transitions and throttles timers,
+  // so transitionend may never arrive. Settle immediately instead of leaving a
+  // stranded overlay for the next time the widget is shown.
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) endFade();
+  });
+
+  // What is currently on screen, so we never fade when nothing actually changed.
+  let painted = { view: null, y: null, m: null };
+
+  function render(opts) {
     const isMonths = state.view === 'months';
+
+    const fade = !!(opts && opts.animate)
+      && !isMonths
+      && painted.view === 'days'
+      && (painted.y !== state.cursor.y || painted.m !== state.cursor.m)
+      && !!el.grid.firstChild;
+
+    const ghost = fade ? makeGhost() : null; // snapshot before the rebuild
+
     el.dayView.hidden = isMonths;
     el.monthView.hidden = !isMonths;
     renderHeader();
     if (isMonths) renderMonthPicker();
     else renderDays();
-    renderEvents();
+
+    if (ghost) {
+      beginFade(ghost); // renderEvents() runs when the fade ends
+    } else {
+      settleFade();
+      renderEvents();
+    }
+
+    painted = { view: state.view, y: state.cursor.y, m: state.cursor.m };
   }
 
   // ---------------------------------------------------------------- actions
@@ -268,6 +365,9 @@
   }
 
   function selectDay(d) {
+    // The live grid is clickable mid-fade; snap the ghost away so the new ring
+    // isn't hidden underneath it.
+    settleFade();
     state.selected = { y: state.cursor.y, m: state.cursor.m, d: d };
     paintSelection();
     renderEvents();
@@ -279,7 +379,7 @@
     if (y < MIN_YEAR || y > MAX_YEAR) return;
     state.cursor = { y: y, m: next.getMonth() };
     state.selected = null; // navigating away clears the selection
-    render();
+    render({ animate: true });
     loadMonth();
   }
 
@@ -295,7 +395,7 @@
     state.cursor = { y: state.today.y, m: state.today.m };
     state.selected = { y: state.today.y, m: state.today.m, d: state.today.d };
     state.view = 'days';
-    render();
+    render({ animate: true });
     loadMonth();
   }
 
@@ -392,7 +492,11 @@
   }
 
   // Exposed purely so the verification harness can drive the widget.
-  window.__cal = { state: state, render: render, loadMonth: loadMonth };
+  window.__cal = {
+    state: state, render: render, loadMonth: loadMonth,
+    stepMonth: stepMonth, goToToday: goToToday,
+    ghost: function () { return fadeGhost; },
+  };
 
   init();
 })();
