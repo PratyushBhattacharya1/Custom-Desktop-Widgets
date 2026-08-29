@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "refreshMinutes": 60,
+  "calendars": [
+    {
+      "id": "personal",
+      "name": "Personal",
+      "url": "PASTE_SECRET_ICAL_URL_HERE",
+      "color": "#4c8dff",
+      "enabled": true
+    },
+    {
+      "id": "birthdays",
+      "name": "Birthdays",
+      "url": "PASTE_SECRET_ICAL_URL_HERE",
+      "color": "#f0883e",
+      "enabled": true
+    },
+    {
+      "id": "canvas",
+      "name": "Canvas",
+      "url": "PASTE_SECRET_ICAL_URL_HERE",
+      "color": "#a371f7",
+      "enabled": true
+    },
+    {
+      "id": "holidays-ae",
+      "name": "Holidays in UAE",
+      "url": "https://calendar.google.com/calendar/ical/en.ae%23holiday%40group.v.calendar.google.com/public/basic.ics",
+      "color": "#3fb950",
+      "enabled": true
+    },
+    {
+      "id": "holidays-us",
+      "name": "Holidays in US",
+      "url": "https://calendar.google.com/calendar/ical/en.usa%23holiday%40group.v.calendar.google.com/public/basic.ics",
+      "color": "#db6d28",
+      "enabled": true
+    }
+  ]
+}

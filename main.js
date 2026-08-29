@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, Tray, screen } = require('electron');
 const path = require('path');
 const store = require('./src/main/store');
 const ipc = require('./src/main/ipc');
+const calendarService = require('./src/main/calendar/service');
 
 // ---- Add / remove widgets here ----
 const WIDGETS = [
@@ -23,7 +24,7 @@ function createWidget(widget) {
     y: Number.isFinite(saved.y) ? saved.y : widget.defaultY,
     frame: false,          // no title bar / borders
     transparent: true,     // lets rounded/irregular widget shapes show through
-    resizable: false,
+    resizable: false,      // no drag-to-resize; the calendar resizes itself via setBounds
     hasShadow: false,
     skipTaskbar: true,     // don't clutter the taskbar with widgets
     alwaysOnTop: false,    // normal z-order — widgets behave like ordinary windows
@@ -122,6 +123,14 @@ app.whenReady().then(() => {
   ipc.register();
   WIDGETS.forEach((w) => createWidget(w));
   createTray();
+
+  calendarService.init(__dirname);
+  calendarService.onUpdated((payload) => {
+    const cal = windows.calendar;
+    if (cal && !cal.isDestroyed() && !cal.webContents.isDestroyed()) {
+      cal.webContents.send('calendar:updated', payload);
+    }
+  });
 
   screen.on('display-metrics-changed', notifyAllWorkAreas);
   screen.on('display-added', notifyAllWorkAreas);

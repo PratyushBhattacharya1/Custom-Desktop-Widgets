@@ -4,6 +4,7 @@
 // renderer supplies — so one widget can't read or mutate another's state.
 const { ipcMain, BrowserWindow, screen } = require('electron');
 const store = require('./store');
+const calendarService = require('./calendar/service');
 
 function windowFor(event) {
   return BrowserWindow.fromWebContents(event.sender);
@@ -50,6 +51,15 @@ function register() {
     applyHeight(win, height);
   });
 
+  // --- calendar ---
+  ipcMain.handle('calendar:get-month', (_event, payload) => {
+    const year = Number(payload && payload.year);
+    const month = Number(payload && payload.month);
+    if (!Number.isInteger(year) || !Number.isInteger(month)) return null;
+    return calendarService.getMonth(year, month);
+  });
+
+  ipcMain.handle('calendar:refresh', async () => calendarService.refresh());
 }
 
 // --- height application, with the three anti-oscillation guards ---

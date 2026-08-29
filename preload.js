@@ -16,3 +16,9 @@ contextBridge.exposeInMainWorld('widgetAPI', {
     ipcRenderer.on('widget:work-area-changed', (_event, data) => cb(data)),
   requestHeight: (height) => ipcRenderer.send('widget:request-height', height),
 });
+
+contextBridge.exposeInMainWorld('calendarAPI', {
+  getMonth: (year, month) => ipcRenderer.invoke('calendar:get-month', { year, month }),
+  refresh: () => ipcRenderer.invoke('calendar:refresh'),
+  onUpdated: (cb) => ipcRenderer.on('calendar:updated', (_event, data) => cb(data)),
+});
