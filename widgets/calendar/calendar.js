@@ -441,14 +441,37 @@
 
   // ---------------------------------------------------------------- midnight
 
+  // Moves the widget onto the new day. Split out from the timer so it can be
+  // driven directly instead of waiting for an actual midnight.
+  function rollToNewDay() {
+    const prevToday = state.today;
+    state.today = todayParts();
+
+    // Leaving the widget sitting on today should keep it on today. A day the
+    // user deliberately picked is left where they put it, so the selection
+    // can't silently jump out from under them overnight.
+    if (!sameDay(state.selected, prevToday)) {
+      render();
+      return;
+    }
+
+    state.selected = { y: state.today.y, m: state.today.m, d: state.today.d };
+    // Rolling into a new month has to carry the grid with it, or the selected
+    // day would sit outside the month on screen.
+    const monthChanged =
+      state.cursor.y !== state.today.y || state.cursor.m !== state.today.m;
+    state.cursor = { y: state.today.y, m: state.today.m };
+    render();
+    if (monthChanged) loadMonth();
+  }
+
   function scheduleMidnight() {
     const now = new Date();
     // Aim at the next actual local midnight rather than a fixed 24h interval,
     // which would drift across DST.
     const next = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 5);
     setTimeout(function () {
-      state.today = todayParts();
-      render();
+      rollToNewDay();
       scheduleMidnight();
     }, Math.max(1000, next.getTime() - now.getTime()));
   }
@@ -483,7 +506,7 @@
   // Exposed purely so the verification harness can drive the widget.
   window.__cal = {
     state: state, render: render, loadMonth: loadMonth,
-    stepMonth: stepMonth, goToToday: goToToday,
+    stepMonth: stepMonth, goToToday: goToToday, rollToNewDay: rollToNewDay,
     ghost: function () { return fadeGhost; },
   };
 
