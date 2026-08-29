@@ -56,6 +56,7 @@ html.pos-locked body {
 }
 
 .pin-btn {
+  position: relative; /* anchors the ::before chip; no layout effect in a grid */
   width: 24px;
   height: 24px;
   display: grid;
@@ -97,8 +98,34 @@ html.pos-locked body {
 }
 
 .pin-btn:hover {
-  background-color: rgba(255, 255, 255, 0.08);
   transform: translateY(-1px);
+}
+
+/* A translucent disc behind the glyph so the pin reads on a dark card, a light
+   card, and a fully transparent one. Two layers do the work: an inset hairline
+   gives it an edge against dark backgrounds, an outer shadow against light.
+   It lives on ::before so pin.js's DOM, the .ready visibility gate and the
+   opacity ladder above are all untouched — the chip rides the button's own
+   opacity, so it inherits every reveal state for free. */
+.pin-btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(12, 14, 20, 0.5);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.18),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: background-color 140ms ease, box-shadow 140ms ease;
+}
+
+/* The glyph has to ride above the chip or the chip covers it. */
+.pin-btn > svg {
+  position: relative;
+}
+
+.pin-btn:hover::before {
+  background: rgba(38, 44, 58, 0.62);
 }
 
 /* Deliberately quicker than the hover transition so the press reads crisp. */
@@ -119,8 +146,22 @@ html.pos-locked body {
   opacity: 1;
 }
 
-.pin-btn.pinned:hover {
-  background-color: var(--accent-soft);
+/* Pinned reads as a blue-ringed disc regardless of what's behind it. */
+.pin-btn.pinned::before {
+  box-shadow:
+    inset 0 0 0 1px rgba(76, 141, 255, 0.55),
+    0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.pin-btn.pinned:hover::before {
+  background: rgba(30, 48, 84, 0.65);
+}
+
+/* Hiding the pin removes the whole zone, not just the button: display:none so
+   the 40x40 no-drag hole in the corner goes with it, rather than leaving an
+   invisible patch that won't drag and isn't anything else. */
+html.no-pin .pin-zone {
+  display: none;
 }
 
 .pin-btn.pinned .pin-head {
