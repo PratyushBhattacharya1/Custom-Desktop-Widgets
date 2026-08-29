@@ -1,3 +1,18 @@
-// Nothing needed yet — dragging is handled purely by CSS (-webkit-app-region).
-// This file is here so you have a safe place to expose IPC calls later,
-// e.g. contextBridge.exposeInMainWorld('widgetAPI', { lockPosition: () => ipcRenderer.send('lock') })
+// Bridges a minimal, explicit API into each widget renderer.
+//
+// Renderers are sandboxed with contextIsolation, so this is their only route to
+// the main process. Note that no method takes a widget id — main resolves that
+// from the IPC sender, so a widget can only ever act on itself.
+const { contextBridge, ipcRenderer } = require('electron');
+
+contextBridge.exposeInMainWorld('widgetAPI', {
+  // Pin (lock position)
+  getPinned: () => ipcRenderer.invoke('widget:get-pinned'),
+  setPinned: (pinned) => ipcRenderer.invoke('widget:set-pinned', pinned),
+
+  // Display metrics + self-resize
+  getWorkArea: () => ipcRenderer.invoke('widget:get-work-area'),
+  onWorkAreaChanged: (cb) =>
+    ipcRenderer.on('widget:work-area-changed', (_event, data) => cb(data)),
+  requestHeight: (height) => ipcRenderer.send('widget:request-height', height),
+});

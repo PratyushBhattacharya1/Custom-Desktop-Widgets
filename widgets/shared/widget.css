@@ -1,0 +1,97 @@
+/* Shared tokens and chrome for every widget.
+   Link this BEFORE a widget's own <style> block so per-widget rules win. */
+
+:root {
+  --accent: #4c8dff;
+  --accent-soft: rgba(76, 141, 255, 0.18);
+  --on-accent: #0b1220;
+  --card-bg: rgba(20, 20, 25, 0.55);
+  --hairline: rgba(255, 255, 255, 0.1);
+}
+
+/* Anchors the pin button; widgets set their own size/padding. */
+.card {
+  position: relative;
+}
+
+/* When locked, the whole window stops being a drag handle. The pin button
+   re-enables itself below so it stays clickable in both states. */
+html.pos-locked body {
+  -webkit-app-region: no-drag;
+}
+
+.pin-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #fff;
+  opacity: 0.5;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  /* Hidden until the pin state resolves over IPC, so it can't flash wrong. */
+  visibility: hidden;
+  transition: opacity 140ms ease, background-color 140ms ease, transform 140ms ease;
+}
+
+.pin-btn.ready {
+  visibility: visible;
+}
+
+.pin-btn:hover {
+  opacity: 0.9;
+  background-color: rgba(255, 255, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+/* Deliberately quicker than the hover transition so the press reads crisp. */
+.pin-btn:active {
+  transform: scale(0.88);
+  transition-duration: 90ms;
+}
+
+.pin-btn.pinned {
+  opacity: 1;
+  color: var(--accent);
+}
+
+.pin-btn.pinned:hover {
+  background-color: var(--accent-soft);
+}
+
+.pin-btn.pinned .pin-head {
+  fill: currentColor;
+  fill-opacity: 0.3;
+}
+
+@keyframes pin-pop {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+
+.pin-btn.pop {
+  animation: pin-pop 220ms ease;
+}
+
+/* Shared dark scrollbar, used by the calendar's events panel. */
+.thin-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+.thin-scroll::-webkit-scrollbar { width: 6px; }
+.thin-scroll::-webkit-scrollbar-track { background: transparent; }
+.thin-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 3px;
+}
+.thin-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}

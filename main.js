@@ -1,21 +1,7 @@
-const { app, BrowserWindow, Menu, Tray } = require('electron');
+const { app, BrowserWindow, Menu, Tray, screen } = require('electron');
 const path = require('path');
-const fs = require('fs');
-
-// Where we persist each widget's x/y position between runs
-const configPath = path.join(app.getPath('userData'), 'widget-positions.json');
-
-function loadPositions() {
-  try {
-    return JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-  } catch {
-    return {};
-  }
-}
-
-function savePositions(positions) {
-  fs.writeFileSync(configPath, JSON.stringify(positions, null, 2));
-}
+const store = require('./src/main/store');
+const ipc = require('./src/main/ipc');
 
 // ---- Add / remove widgets here ----
 const WIDGETS = [
@@ -27,14 +13,14 @@ const WIDGETS = [
 const windows = {};
 let tray = null;
 
-function createWidget(widget, positions) {
-  const saved = positions[widget.id];
+function createWidget(widget) {
+  const saved = store.get(widget.id);
 
   const win = new BrowserWindow({
     width: widget.width,
     height: widget.height,
-    x: saved ? saved.x : widget.defaultX,
-    y: saved ? saved.y : widget.defaultY,
+    x: Number.isFinite(saved.x) ? saved.x : widget.defaultX,
+    y: Number.isFinite(saved.y) ? saved.y : widget.defaultY,
     frame: false,          // no title bar / borders
     transparent: true,     // lets rounded/irregular widget shapes show through
     resizable: false,
@@ -48,9 +34,14 @@ function createWidget(widget, positions) {
     },
   });
 
+  // Identifies this window to IPC handlers, which resolve it from event.sender.
+  // The renderer never sends its own id, so one widget can't act on another.
   win.__widgetId = widget.id;
   win.setMenuBarVisibility(false);
   win.loadFile(widget.file);
+
+  // A widget saved as pinned comes back immovable.
+  if (saved.pinned) win.setMovable(false);
 
   win.once('ready-to-show', () => win.show());
 
@@ -59,16 +50,14 @@ function createWidget(widget, positions) {
   win.on('show', refreshTray);
   win.on('hide', refreshTray);
 
-  // Debounced save so we're not writing to disk on every pixel of movement
-  let saveTimeout;
+  // setBounds() can emit 'moved' on Windows even when x/y are unchanged, so only
+  // write when the position actually differs. store.patch is itself debounced.
   win.on('moved', () => {
-    clearTimeout(saveTimeout);
-    saveTimeout = setTimeout(() => {
-      const [x, y] = win.getPosition();
-      const positions = loadPositions();
-      positions[widget.id] = { x, y };
-      savePositions(positions);
-    }, 250);
+    const [x, y] = win.getPosition();
+    const prev = store.get(widget.id);
+    if (prev.x === x && prev.y === y) return;
+    store.patch(widget.id, { x, y });
+    notifyWorkArea(win);
   });
 
   windows[widget.id] = win;
@@ -118,12 +107,29 @@ function createTray() {
   refreshTray();
 }
 
+// Tells a widget which display it's on, so it can recompute its height budget.
+function notifyWorkArea(win) {
+  if (win.isDestroyed() || win.webContents.isDestroyed()) return;
+  win.webContents.send('widget:work-area-changed', ipc.workAreaFor(win));
+}
+
+function notifyAllWorkAreas() {
+  Object.values(windows).forEach(notifyWorkArea);
+}
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
-  const positions = loadPositions();
-  WIDGETS.forEach((w) => createWidget(w, positions));
+  ipc.register();
+  WIDGETS.forEach((w) => createWidget(w));
   createTray();
+
+  screen.on('display-metrics-changed', notifyAllWorkAreas);
+  screen.on('display-added', notifyAllWorkAreas);
+  screen.on('display-removed', notifyAllWorkAreas);
 });
+
+// Don't lose a debounced write if the app exits mid-timer.
+app.on('before-quit', () => store.flush());
 
 app.on('window-all-closed', () => {
   // Widgets are meant to run headless in the tray; closing a window shouldn't quit the app.
