@@ -232,6 +232,15 @@ td {
   /* Collapses to nothing when no day is selected or the day is empty. */
   margin-top: 0;
   overflow: hidden;
+  transition: opacity 130ms ease;
+}
+
+/* Navigating months clears the selection, which collapses this panel. Fading it
+   alongside the grid means the collapse lands at opacity 0 instead of snapping
+   23px of chrome away mid-animation. Never transition #events-scroll's
+   max-height — applyMaxHeight() writes that inline and resets it to `none`. */
+.events.is-fading {
+  opacity: 0;
 }
 .events.has-content {
   margin-top: 12px;
