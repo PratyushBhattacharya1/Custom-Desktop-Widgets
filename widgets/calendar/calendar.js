@@ -128,10 +128,10 @@
           btn.tabIndex = -1;
         } else {
           btn.textContent = String(dayNum);
+          btn.dataset.day = String(dayNum);
           const cell = { y: y, m: m, d: dayNum };
           if (sameDay(cell, state.today)) btn.classList.add('today');
           if (sameDay(cell, state.selected)) btn.classList.add('selected');
-          btn.addEventListener('click', function () { selectDay(dayNum); });
         }
 
         td.appendChild(btn);
@@ -253,9 +253,23 @@
 
   // ---------------------------------------------------------------- actions
 
+  // Moves the ring by toggling one class, so the .day transition in calendar.css
+  // actually gets a start value to animate from. Rebuilding the grid destroyed
+  // the nodes, which meant the ring always appeared instantly.
+  function paintSelection() {
+    const sel = state.selected;
+    const onMonth = !!sel && sel.y === state.cursor.y && sel.m === state.cursor.m;
+    const cells = el.grid.querySelectorAll('.day');
+    for (let i = 0; i < cells.length; i++) {
+      const btn = cells[i];
+      const isSel = onMonth && Number(btn.dataset.day) === sel.d;
+      btn.classList.toggle('selected', isSel);
+    }
+  }
+
   function selectDay(d) {
     state.selected = { y: state.cursor.y, m: state.cursor.m, d: d };
-    renderDays();
+    paintSelection();
     renderEvents();
   }
 
@@ -297,6 +311,14 @@
     state.view = state.view === 'days' ? 'months' : 'days';
     render();
   });
+  // Delegated: #grid is only ever emptied, never replaced, so one listener here
+  // outlives every render and saves rebinding 31 closures each time.
+  el.grid.addEventListener('click', function (e) {
+    const btn = e.target.closest('.day');
+    if (!btn || !btn.dataset.day) return;
+    selectDay(Number(btn.dataset.day));
+  });
+
   el.todayBtn.addEventListener('click', goToToday);
   // Up = previous, down = next, as specified.
   el.prev.addEventListener('click', function () {
