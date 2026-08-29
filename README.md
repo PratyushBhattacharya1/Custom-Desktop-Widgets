@@ -77,6 +77,8 @@ Renderers are sandboxed with `contextIsolation`, so all file and network access 
 
 Hand-rolled with no dependencies. It handles the things real Google exports actually contain: line folding that splits mid-parameter, quoted parameter values, `\,`/`\;`/`\n` escaping, all three DTSTART forms, exclusive all-day DTENDs, `RRULE` (weekly/yearly), `EXDATE`, and `RECURRENCE-ID` overrides matched by calendar day. Timezone conversion uses `Intl.DateTimeFormat` — recurrences expand in the event's own wall-clock zone so a weekly 8 AM class doesn't drift an hour across a DST change.
 
+**Times are shown in your machine's current timezone**, converted from each event's own `TZID`. A class scheduled for 8 AM Los Angeles displays as 8 PM when your machine is set to Dubai, and shifts by an hour when one zone changes for DST and the other doesn't — the same behaviour Google Calendar shows for the same event. This is correct conversion, not a bug; there is no fixed or configured display timezone anywhere in the code.
+
 Run the regression harness against a Google Calendar export (`.zip` or `.ics`):
 
 ```bash
@@ -107,6 +109,6 @@ Both need an app registration and an OAuth consent flow.
 
 ## Known limitations
 
-- **Event times display in your machine's timezone.** Events carrying a different `TZID` are converted correctly, but that means a class scheduled at 8 AM Los Angeles shows at 8 PM if your machine is set to Dubai. An event crossing local midnight shows an end time earlier than its start.
+- An event crossing local midnight shows an end time earlier than its start.
 - Google Tasks are not available in any iCal feed, so there is no task section.
 - Google's iCal export carries no color information, which is why colors are assigned per calendar in config rather than per event.
