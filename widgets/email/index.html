@@ -12,15 +12,12 @@
     -webkit-app-region: drag;
     user-select: none;
   }
+  /* Colours, radius and blur come from widget.css tokens so the settings menu
+     can repaint this card. Only layout lives here. */
   .card {
     width: 360px;
     height: 300px;
-    box-sizing: border-box;
-    background: rgba(20, 20, 25, 0.55);
-    backdrop-filter: blur(10px);
-    border-radius: 20px;
     padding: 18px;
-    color: #fff;
   }
   .header {
     font-size: 16px;

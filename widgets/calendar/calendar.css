@@ -14,14 +14,9 @@ body {
   width: 320px;
   /* Height follows content: the events panel grows and shrinks the window. */
   height: auto;
-  box-sizing: border-box;
-  background: rgba(20, 20, 25, 0.55);
-  backdrop-filter: blur(10px);
-  border-radius: 20px;
   /* Extra top padding leaves the pin button its own strip, which doubles as the
      drag handle now that most of the card is click-through. */
   padding: 30px 18px 18px;
-  color: #fff;
 }
 
 /* --- header ------------------------------------------------------------- */

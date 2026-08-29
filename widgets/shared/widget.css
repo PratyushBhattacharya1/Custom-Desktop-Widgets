@@ -5,13 +5,33 @@
   --accent: #4c8dff;
   --accent-soft: rgba(76, 141, 255, 0.18);
   --on-accent: #0b1220;
-  --card-bg: rgba(20, 20, 25, 0.55);
   --hairline: rgba(255, 255, 255, 0.1);
+
+  /* Card appearance. The main process overwrites these on documentElement when
+     a setting changes, which outranks this block and repaints the next frame. */
+  --card-bg: rgba(20, 20, 25, 0.55);
+  --card-fg: #ffffff;
+  --card-radius: 20px;
+  --card-halo: none;
+  /* backdrop-filter does nothing on a transparent frameless window: the desktop
+     isn't in Chromium's compositing tree, so there's no backdrop to blur. Kept
+     as a token so enabling Win11 acrylic later is a one-value change. */
+  --card-blur: none;
+  --card-scale: 1;
 }
 
-/* Anchors the pin button; widgets set their own size/padding. */
+/* Anchors the pin button; widgets set their own size/padding.
+   Widgets must NOT re-declare these properties — their own <style> block is
+   parsed after this file, so an override would silently stop responding to
+   settings changes. */
 .card {
   position: relative;
+  box-sizing: border-box;
+  background: var(--card-bg);
+  color: var(--card-fg);
+  border-radius: var(--card-radius);
+  backdrop-filter: var(--card-blur);
+  text-shadow: var(--card-halo);
 }
 
 /* When locked, the whole window stops being a drag handle. The pin button
