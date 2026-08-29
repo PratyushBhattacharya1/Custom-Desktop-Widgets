@@ -1,7 +1,6 @@
-const { app, BrowserWindow, ipcMain, Menu, Tray } = require('electron');
+const { app, BrowserWindow, Menu, Tray } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { execFile } = require('child_process');
 
 // Where we persist each widget's x/y position between runs
 const configPath = path.join(app.getPath('userData'), 'widget-positions.json');
@@ -28,22 +27,6 @@ const WIDGETS = [
 const windows = {};
 let tray = null;
 
-// Reparents a window's native handle under the desktop's hidden WorkerW layer,
-// so it sits above the wallpaper/icons but behind every normal app window.
-function pinToDesktop(win) {
-  if (process.platform !== 'win32') return;
-  const handle = win.getNativeWindowHandle();
-  const hwnd = handle.length === 8 ? handle.readBigUInt64LE(0).toString() : handle.readUInt32LE(0).toString();
-  const scriptPath = path.join(__dirname, 'scripts', 'pin-to-desktop.ps1');
-  execFile(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, '-Hwnd', hwnd],
-    (err) => {
-      if (err) console.error(`Failed to pin "${win.__widgetId}" to desktop:`, err);
-    }
-  );
-}
-
 function createWidget(widget, positions) {
   const saved = positions[widget.id];
 
@@ -57,8 +40,8 @@ function createWidget(widget, positions) {
     resizable: false,
     hasShadow: false,
     skipTaskbar: true,     // don't clutter the taskbar with widgets
-    alwaysOnTop: false,    // pinned to the desktop layer instead, see pinToDesktop()
-    show: false,           // shown manually once pinned, to avoid a flash at the wrong z-order
+    alwaysOnTop: false,    // normal z-order — widgets behave like ordinary windows
+    show: false,           // shown on ready-to-show to avoid a flash of unpositioned content
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -69,10 +52,12 @@ function createWidget(widget, positions) {
   win.setMenuBarVisibility(false);
   win.loadFile(widget.file);
 
-  win.once('ready-to-show', () => {
-    win.show();
-    pinToDesktop(win);
-  });
+  win.once('ready-to-show', () => win.show());
+
+  // Keep the tray checkboxes honest: they read isVisible() at build time, so the
+  // menu has to be rebuilt whenever visibility actually changes.
+  win.on('show', refreshTray);
+  win.on('hide', refreshTray);
 
   // Debounced save so we're not writing to disk on every pixel of movement
   let saveTimeout;
@@ -99,15 +84,13 @@ function buildTrayMenu() {
     return {
       label: widgetLabel(widget.id),
       type: 'checkbox',
-      checked: win ? win.isVisible() : true,
-      click: (menuItem) => {
+      checked: win ? win.isVisible() : false,
+      // Toggle off the window's real state rather than the menu item's, so a
+      // stale tick can never invert the action.
+      click: () => {
         if (!win) return;
-        if (menuItem.checked) {
-          win.show();
-          pinToDesktop(win);
-        } else {
-          win.hide();
-        }
+        if (win.isVisible()) win.hide();
+        else win.show();
       },
     };
   });
@@ -116,20 +99,23 @@ function buildTrayMenu() {
     { label: 'Widgets', enabled: false },
     ...toggleItems,
     { type: 'separator' },
-    {
-      label: 'Show All',
-      click: () => Object.values(windows).forEach((w) => { w.show(); pinToDesktop(w); }),
-    },
+    { label: 'Show All', click: () => Object.values(windows).forEach((w) => w.show()) },
     { label: 'Hide All', click: () => Object.values(windows).forEach((w) => w.hide()) },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
 }
 
+// Menus are immutable once built, so resyncing the checkboxes means rebuilding.
+function refreshTray() {
+  if (!tray) return;
+  tray.setContextMenu(buildTrayMenu());
+}
+
 function createTray() {
   tray = new Tray(path.join(__dirname, 'assets', 'tray-icon.png'));
   tray.setToolTip('Desktop Widgets');
-  tray.setContextMenu(buildTrayMenu());
+  refreshTray();
 }
 
 app.whenReady().then(() => {
