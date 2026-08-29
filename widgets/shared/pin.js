@@ -49,6 +49,16 @@
     }
   });
 
+  // The context menu can toggle the lock, so mirror pushed state. paint(false)
+  // deliberately: the pop animation belongs to a click on the button itself.
+  if (window.widgetAPI.onSettingsChanged) {
+    window.widgetAPI.onSettingsChanged(function (s) {
+      if (!s || typeof s.pinned !== 'boolean' || s.pinned === pinned) return;
+      pinned = s.pinned;
+      paint(false);
+    });
+  }
+
   window.widgetAPI
     .getPinned()
     .then((value) => {

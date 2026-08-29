@@ -2,6 +2,7 @@ const { app, BrowserWindow, Menu, Tray, screen } = require('electron');
 const path = require('path');
 const store = require('./src/main/store');
 const ipc = require('./src/main/ipc');
+const widgetMenu = require('./src/main/menu');
 const calendarService = require('./src/main/calendar/service');
 
 // ---- Add / remove widgets here ----
@@ -43,6 +44,9 @@ function createWidget(widget) {
 
   // A widget saved as pinned comes back immovable.
   if (saved.pinned) win.setMovable(false);
+
+  // Right-click settings. Both paths are needed — see src/main/menu.js.
+  widgetMenu.attach(win);
 
   win.once('ready-to-show', () => win.show());
 
