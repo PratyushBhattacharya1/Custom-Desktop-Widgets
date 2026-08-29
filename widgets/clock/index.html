@@ -13,24 +13,37 @@
     user-select: none;
   }
   /* Colours, radius and blur come from widget.css tokens so the settings menu
-     can repaint this card. Only layout lives here. */
+     can repaint this card. Only layout lives here.
+
+     width: max-content is load-bearing. With a percentage width the card would
+     track the window, so the measured width would always equal the current
+     window width and could never shrink — a fixed point at whatever size it
+     opened at. max-content measures the content instead, which converges in one
+     round trip. Absolutely positioned children (the pin zone) don't contribute
+     to max-content, so they can't inflate it. */
   .card {
-    width: 260px;
-    height: 260px;
+    width: max-content;
+    min-width: 140px;
+    padding: calc(22px * var(--card-scale)) calc(28px * var(--card-scale));
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
   }
   .time {
-    font-size: 40px;
+    font-size: calc(40px * var(--card-scale));
     font-weight: 600;
     letter-spacing: 1px;
+    line-height: 1.1;
+    /* Proportional digits make "11:11" and "10:00" different widths, which would
+       fire the ResizeObserver every minute for no visible reason. */
+    font-variant-numeric: tabular-nums;
   }
   .date {
-    margin-top: 6px;
-    font-size: 14px;
+    margin-top: calc(6px * var(--card-scale));
+    font-size: calc(14px * var(--card-scale));
     opacity: 0.7;
+    white-space: nowrap;
   }
 </style>
 </head>
@@ -40,19 +53,32 @@
     <div class="date" id="date">--</div>
   </div>
 
+  <!-- Shared helpers first: the inline script below calls window.widgetAutosize. -->
+  <script src="../shared/autosize.js"></script>
+  <script src="../shared/settings.js"></script>
+
   <script>
+    const timeEl = document.getElementById('time');
+    const dateEl = document.getElementById('date');
+
+    // Only write when the rendered string actually changes: this ticks every
+    // second but shows hours and minutes, so 59 of every 60 writes were noise.
     function tick() {
       const now = new Date();
-      document.getElementById('time').textContent =
-        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      document.getElementById('date').textContent =
-        now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+      const t = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const d = now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+      if (timeEl.textContent !== t) timeEl.textContent = t;
+      if (dateEl.textContent !== d) dateEl.textContent = d;
     }
     tick();
     setInterval(tick, 1000);
+
+    // The window follows the content on both axes, so changing Size in the
+    // context menu resizes the widget with no further plumbing.
+    if (window.widgetAutosize) {
+      window.widgetAutosize(document.querySelector('.card'), { axes: 'both' });
+    }
   </script>
-  <script src="../shared/autosize.js"></script>
-  <script src="../shared/settings.js"></script>
   <script src="../shared/pin.js"></script>
 </body>
 </html>
