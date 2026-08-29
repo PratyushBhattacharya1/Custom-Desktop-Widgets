@@ -95,3 +95,20 @@ html.pos-locked body {
 .thin-scroll::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.3);
 }
+
+/* Honour the OS "animation effects" setting (Windows: Settings > Accessibility >
+   Visual effects). Everything still changes state, just instantly.
+
+   0.01ms rather than 0 is load-bearing: a zero-duration transition never fires
+   transitionend, and the calendar's cross-fade removes its ghost node in that
+   handler. !important is needed to beat the 90ms :active overrides. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
