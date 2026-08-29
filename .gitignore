@@ -5,6 +5,9 @@ node_modules/
 # Anyone holding one of these URLs can read that calendar indefinitely.
 calendars.local.json
 
+# Gmail OAuth client credentials and the stored refresh token.
+gmail.local.json
+
 # Personal calendar exports
 *.ical.zip
 *.ics

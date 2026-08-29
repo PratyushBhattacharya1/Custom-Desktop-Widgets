@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "refreshMinutes": 5,
+  "maxMessages": 25,
+  "query": "in:inbox",
+  "clientId": "PASTE_OAUTH_CLIENT_ID_HERE",
+  "clientSecret": "PASTE_OAUTH_CLIENT_SECRET_HERE"
+}
