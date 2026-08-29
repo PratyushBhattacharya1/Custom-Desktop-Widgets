@@ -43,13 +43,24 @@
 
   // ---------------------------------------------------------------- data
 
+  let monthReq = 0;
+
   async function loadMonth() {
     if (!window.calendarAPI) return;
+    // Requests can land out of order, and an onUpdated broadcast can race a
+    // navigation. Without these guards state.month ends up describing a
+    // different month than state.cursor, which silently shows the wrong events.
+    const seq = ++monthReq;
+    const want = { y: state.cursor.y, m: state.cursor.m };
+    let data = null;
     try {
-      state.month = await window.calendarAPI.getMonth(state.cursor.y, state.cursor.m);
+      data = await window.calendarAPI.getMonth(want.y, want.m);
     } catch {
-      state.month = null;
+      data = null;
     }
+    if (seq !== monthReq) return;
+    if (want.y !== state.cursor.y || want.m !== state.cursor.m) return;
+    state.month = data;
     renderHeader();
     renderEvents();
   }
