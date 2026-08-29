@@ -140,6 +140,10 @@ function applySize(win, requested) {
   win.setMinimumSize(1, 1);
   win.setMaximumSize(10000, 10000);
   win.setBounds({ x: bounds.x, y: bounds.y, width: targetW, height: targetH });
+
+  // Remember it so the next launch opens at the fitted size instead of the
+  // registry default and then visibly snapping once the renderer measures.
+  store.patch(win.__widgetId, { w: targetW, h: targetH });
 }
 
 module.exports = {

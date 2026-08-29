@@ -19,8 +19,10 @@ function createWidget(widget) {
   const saved = store.get(widget.id);
 
   const win = new BrowserWindow({
-    width: widget.width,
-    height: widget.height,
+    // Saved size wins over the registry default, so a fitted widget reopens at
+    // the size it settled on rather than snapping after the first measurement.
+    width: Number.isFinite(saved.w) ? saved.w : widget.width,
+    height: Number.isFinite(saved.h) ? saved.h : widget.height,
     x: Number.isFinite(saved.x) ? saved.x : widget.defaultX,
     y: Number.isFinite(saved.y) ? saved.y : widget.defaultY,
     frame: false,          // no title bar / borders

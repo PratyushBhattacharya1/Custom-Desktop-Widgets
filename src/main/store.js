@@ -1,8 +1,18 @@
-// Persistent per-widget state (position + pinned flag), written to userData.
+// Persistent per-widget state, written to userData.
 //
-// Shape: { "<widgetId>": { x, y, pinned } }
-// The `pinned` key is additive, so state files written before pinning existed
-// still load cleanly — a missing flag simply reads as false.
+// Shape: { "<widgetId>": { x, y, w, h, pinned, settings: { ... } } }
+//
+// Two buckets. The top level is window state — the things the BrowserWindow
+// itself owns and the OS enforces (setBounds, setMovable). `settings` is
+// appearance and behaviour, which only the renderer cares about; see
+// settings.js for its catalogue and sanitiser.
+//
+// Every key is additive, so older state files still load cleanly: a missing
+// flag reads as false and a missing size falls back to the registry default.
+//
+// The filename is historical — it predates everything but x/y — and is kept
+// because renaming it would either lose saved positions or require a fallback
+// path maintained forever.
 const { app } = require('electron');
 const path = require('path');
 const fs = require('fs');
