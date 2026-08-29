@@ -27,14 +27,21 @@
     </div>
 
     <div id="day-view">
-      <table>
+      <!-- The weekday strip is its own table so it can hold still while the grid
+           below cross-fades. Both are table-layout:fixed at the same width, so
+           the seven columns resolve identically with nothing to keep in sync. -->
+      <table class="weekdays" aria-hidden="true">
         <thead>
           <tr>
             <th>M</th><th>T</th><th>W</th><th>T</th><th>F</th><th>S</th><th>S</th>
           </tr>
         </thead>
-        <tbody id="grid"></tbody>
       </table>
+      <div class="days-stack">
+        <table class="days">
+          <tbody id="grid"></tbody>
+        </table>
+      </div>
     </div>
 
     <div id="month-view" hidden>

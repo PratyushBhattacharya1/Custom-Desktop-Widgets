@@ -119,6 +119,13 @@ td {
   height: 28px;
 }
 
+/* Positioning context for the cross-fade ghost. The live table must stay in
+   normal flow — if it were ever taken out, this box would collapse to zero and
+   applyMaxHeight()'s chrome measurement would go wrong. */
+.days-stack {
+  position: relative;
+}
+
 .day {
   width: 100%;
   height: 26px;
