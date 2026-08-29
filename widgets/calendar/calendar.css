@@ -32,6 +32,10 @@ body {
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
+  /* The pin's 40x40 hover zone is appended last, so by DOM order it would sit
+     over the top of the chevrons and eat their clicks. Lift the header above it. */
+  position: relative;
+  z-index: 1;
 }
 
 .cal-label {

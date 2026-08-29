@@ -14,7 +14,14 @@
     '<path d="M12 17.5v4.5"/>' +
     '<path class="pin-head" d="M9 10.9V5.5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v5.4a2 2 0 0 0 .6 1.4l1.7 1.7a1 1 0 0 1-.7 1.7H6.4a1 1 0 0 1-.7-1.7l1.7-1.7a2 2 0 0 0 .6-1.4z"/>' +
     '</svg>';
-  card.appendChild(btn);
+
+  // The button is hidden until hovered, so it needs a target bigger than itself
+  // to find. The zone is invisible and no-drag: drag regions on Windows often
+  // don't deliver mouse events to the page, so hover has to happen off one.
+  const zone = document.createElement('div');
+  zone.className = 'pin-zone';
+  zone.appendChild(btn);
+  card.appendChild(zone);
 
   let pinned = false;
 

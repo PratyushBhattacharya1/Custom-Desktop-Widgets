@@ -20,10 +20,22 @@ html.pos-locked body {
   -webkit-app-region: no-drag;
 }
 
-.pin-btn {
+/* Invisible hover target for the pin. Sized generously so the hidden button is
+   easy to find, and no-drag because drag regions on Windows often swallow the
+   mouse events that :hover depends on. Centering a 24px button in 40px puts it
+   at 20px from the top and right — exactly where top/right: 8px placed it. */
+.pin-zone {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 0;
+  right: 0;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.pin-btn {
   width: 24px;
   height: 24px;
   display: grid;
@@ -33,7 +45,9 @@ html.pos-locked body {
   border-radius: 7px;
   background: transparent;
   color: #fff;
-  opacity: 0.5;
+  /* Out of sight until the corner is hovered, so the widget reads as wallpaper
+     rather than as a window with controls. */
+  opacity: 0;
   cursor: pointer;
   -webkit-app-region: no-drag;
   /* Hidden until the pin state resolves over IPC, so it can't flash wrong. */
@@ -45,8 +59,24 @@ html.pos-locked body {
   visibility: visible;
 }
 
-.pin-btn:hover {
+/* Reveal states are all scoped under .pin-zone:hover so they share one
+   specificity rank — otherwise the zone rule outranks .pin-btn:hover and the
+   button can never brighten under the pointer. */
+.pin-zone:hover .pin-btn {
+  opacity: 0.5;
+}
+
+/* Keyboard users never trigger :hover, so focus has to reveal it too. */
+.pin-btn:focus-visible,
+.pin-zone:hover .pin-btn:focus-visible {
   opacity: 0.9;
+}
+
+.pin-zone:hover .pin-btn:hover {
+  opacity: 0.9;
+}
+
+.pin-btn:hover {
   background-color: rgba(255, 255, 255, 0.08);
   transform: translateY(-1px);
 }
@@ -57,9 +87,16 @@ html.pos-locked body {
   transition-duration: 90ms;
 }
 
+/* A locked widget keeps a faint pin even at rest — otherwise it looks identical
+   to an unlocked one and the only way to tell is to try dragging it. */
 .pin-btn.pinned {
-  opacity: 1;
+  opacity: 0.25;
   color: var(--accent);
+}
+
+.pin-zone:hover .pin-btn.pinned,
+.pin-btn.pinned:focus-visible {
+  opacity: 1;
 }
 
 .pin-btn.pinned:hover {
