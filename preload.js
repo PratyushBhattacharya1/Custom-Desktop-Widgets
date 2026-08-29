@@ -15,6 +15,12 @@ contextBridge.exposeInMainWorld('widgetAPI', {
   onWorkAreaChanged: (cb) =>
     ipcRenderer.on('widget:work-area-changed', (_event, data) => cb(data)),
   requestHeight: (height) => ipcRenderer.send('widget:request-height', height),
+
+  // Appearance settings. There is deliberately no setter: the context menu
+  // lives in main, so a renderer-side writer would be unused attack surface.
+  getSettings: () => ipcRenderer.invoke('widget:get-settings'),
+  onSettingsChanged: (cb) =>
+    ipcRenderer.on('widget:settings-changed', (_event, data) => cb(data)),
 });
 
 contextBridge.exposeInMainWorld('calendarAPI', {

@@ -4,6 +4,7 @@
 // renderer supplies — so one widget can't read or mutate another's state.
 const { ipcMain, BrowserWindow, screen } = require('electron');
 const store = require('./store');
+const settings = require('./settings');
 const calendarService = require('./calendar/service');
 
 function windowFor(event) {
@@ -33,10 +34,13 @@ function register() {
   ipcMain.handle('widget:set-pinned', (event, pinned) => {
     const win = windowFor(event);
     if (!win) return false;
-    const value = Boolean(pinned);
-    store.patch(win.__widgetId, { pinned: value });
-    win.setMovable(!value); // belt-and-braces: also block OS-level moves
-    return value;
+    return setPinned(win, pinned);
+  });
+
+  ipcMain.handle('widget:get-settings', (event) => {
+    const win = windowFor(event);
+    if (!win) return null;
+    return settings.composeFor(win.__widgetId);
   });
 
   ipcMain.handle('widget:get-work-area', (event) => {
@@ -60,6 +64,22 @@ function register() {
   });
 
   ipcMain.handle('calendar:refresh', async () => calendarService.refresh());
+}
+
+// --- helpers the context menu drives, kept here so store writes live in one place ---
+
+function setPinned(win, pinned) {
+  const value = Boolean(pinned);
+  store.patch(win.__widgetId, { pinned: value });
+  win.setMovable(!value); // belt-and-braces: also block OS-level moves
+  pushSettings(win);
+  return value;
+}
+
+// Renderers apply settings live, so every mutation pushes the composed result.
+function pushSettings(win) {
+  if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  win.webContents.send('widget:settings-changed', settings.composeFor(win.__widgetId));
 }
 
 // --- height application, with the three anti-oscillation guards ---
@@ -102,4 +122,4 @@ function applyHeight(win, requested) {
   win.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: target });
 }
 
-module.exports = { register, workAreaFor, MAX_HEIGHT_FRACTION };
+module.exports = { register, workAreaFor, MAX_HEIGHT_FRACTION, setPinned, pushSettings };
