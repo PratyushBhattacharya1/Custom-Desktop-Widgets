@@ -11,8 +11,16 @@ function windowFor(event) {
   return BrowserWindow.fromWebContents(event.sender);
 }
 
-// Fraction of the display's work area the calendar is allowed to occupy.
+// Fractions of the display's work area a widget is allowed to occupy.
 const MAX_HEIGHT_FRACTION = 0.45;
+const MAX_WIDTH_FRACTION = 0.35;
+
+// Floors. MIN_SIZE bounds the target, MIN_CAP bounds the cap, so a widget near
+// a screen edge still has room to be useful. The height pair reproduces the
+// original Math.max(80,...)/Math.max(120,...) exactly — don't "tidy" it or the
+// calendar's clamping changes.
+const MIN_SIZE = { w: 120, h: 80 };
+const MIN_CAP = { w: 160, h: 120 };
 
 function workAreaFor(win) {
   const [x, y] = win.getPosition();
@@ -21,6 +29,7 @@ function workAreaFor(win) {
     width: display.workArea.width,
     height: display.workArea.height,
     maxWidgetHeight: Math.round(display.workArea.height * MAX_HEIGHT_FRACTION),
+    maxWidgetWidth: Math.round(display.workArea.width * MAX_WIDTH_FRACTION),
   };
 }
 
@@ -49,10 +58,10 @@ function register() {
     return workAreaFor(win);
   });
 
-  ipcMain.on('widget:request-height', (event, height) => {
+  ipcMain.on('widget:request-size', (event, size) => {
     const win = windowFor(event);
     if (!win) return;
-    applyHeight(win, height);
+    applySize(win, size);
   });
 
   // --- calendar ---
@@ -82,21 +91,27 @@ function pushSettings(win) {
   win.webContents.send('widget:settings-changed', settings.composeFor(win.__widgetId));
 }
 
-// --- height application, with the three anti-oscillation guards ---
-const heightState = new WeakMap(); // win -> { last, times: [] }
+// --- size application, with the three anti-oscillation guards ---
+//
+// A missing axis means "leave it alone", which is what lets the calendar keep
+// sending height only and stay byte-identical.
+const sizeState = new WeakMap(); // win -> { last: {w, h}, times: [], warned }
 
-function applyHeight(win, requested) {
-  if (!Number.isFinite(requested)) return;
+function applySize(win, requested) {
+  const wantW = requested && Number.isFinite(requested.width) ? Math.round(requested.width) : null;
+  const wantH = requested && Number.isFinite(requested.height) ? Math.round(requested.height) : null;
+  if (wantW === null && wantH === null) return;
 
-  const state = heightState.get(win) || { last: null, times: [] };
-  heightState.set(win, state);
+  const state = sizeState.get(win) || { last: { w: null, h: null }, times: [], warned: false };
+  sizeState.set(win, state);
 
-  // Guard 3: hard rate limit. A runaway renderer can't spin the main process.
+  // Guard 3: hard rate limit, shared across both axes so a widget oscillating
+  // in width and height still can't spin the main process.
   const now = Date.now();
   state.times = state.times.filter((t) => now - t < 1000);
   if (state.times.length >= 10) {
     if (!state.warned) {
-      console.warn(`Height request rate limit hit for "${win.__widgetId}"; dropping.`);
+      console.warn(`Size request rate limit hit for "${win.__widgetId}"; dropping.`);
       state.warned = true;
     }
     return;
@@ -104,22 +119,31 @@ function applyHeight(win, requested) {
   state.times.push(now);
 
   const bounds = win.getBounds();
-  const { maxWidgetHeight, height: workHeight } = workAreaFor(win);
-
-  // Never let the widget run off the bottom of the screen: the panel's own
-  // scrollbar absorbs whatever doesn't fit.
+  const budget = workAreaFor(win);
   const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y });
-  const roomBelow = display.workArea.y + workHeight - bounds.y - 8;
-  const cap = Math.max(120, Math.min(maxWidgetHeight, roomBelow));
-  const target = Math.max(80, Math.min(Math.round(requested), cap));
+
+  // Never let a widget run off the bottom or the right: the calendar's own
+  // scrollbar absorbs whatever doesn't fit.
+  const roomBelow = display.workArea.y + budget.height - bounds.y - 8;
+  const roomRight = display.workArea.x + budget.width - bounds.x - 8;
+  const capH = Math.max(MIN_CAP.h, Math.min(budget.maxWidgetHeight, roomBelow));
+  const capW = Math.max(MIN_CAP.w, Math.min(budget.maxWidgetWidth, roomRight));
+
+  const targetH = wantH === null ? bounds.height : Math.max(MIN_SIZE.h, Math.min(wantH, capH));
+  const targetW = wantW === null ? bounds.width : Math.max(MIN_SIZE.w, Math.min(wantW, capW));
 
   // Guard 2: main-side no-op when nothing would change.
-  if (state.last === target && bounds.height === target) return;
-  state.last = target;
+  if (state.last.w === targetW && state.last.h === targetH &&
+      bounds.width === targetW && bounds.height === targetH) return;
+  state.last = { w: targetW, h: targetH };
 
-  win.setMinimumSize(bounds.width, 1);
-  win.setMaximumSize(bounds.width, 10000);
-  win.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: target });
+  win.setMinimumSize(1, 1);
+  win.setMaximumSize(10000, 10000);
+  win.setBounds({ x: bounds.x, y: bounds.y, width: targetW, height: targetH });
 }
 
-module.exports = { register, workAreaFor, MAX_HEIGHT_FRACTION, setPinned, pushSettings };
+module.exports = {
+  register, workAreaFor, applySize,
+  MAX_HEIGHT_FRACTION, MAX_WIDTH_FRACTION, MIN_SIZE, MIN_CAP,
+  setPinned, pushSettings,
+};

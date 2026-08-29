@@ -53,8 +53,10 @@
     </div>
   </div>
 
-  <script src="calendar.js"></script>
+  <!-- Shared helpers first: calendar.js calls window.widgetAutosize at load. -->
+  <script src="../shared/autosize.js"></script>
   <script src="../shared/settings.js"></script>
+  <script src="calendar.js"></script>
   <script src="../shared/pin.js"></script>
 </body>
 </html>

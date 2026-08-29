@@ -433,25 +433,11 @@
 
   // ---------------------------------------------------------------- sizing
 
-  let lastSentHeight = -1;
-  let sizeTimer = null;
-
-  function syncHeight() {
-    if (sizeTimer) clearTimeout(sizeTimer);
-    sizeTimer = setTimeout(function () {
-      if (!window.widgetAPI) return;
-      const h = Math.ceil(el.card.getBoundingClientRect().height);
-      // Guard 1: only speak up when the height meaningfully changed, so the
-      // renderer and main process can't ping-pong.
-      if (Math.abs(h - lastSentHeight) <= 1) return;
-      lastSentHeight = h;
-      window.widgetAPI.requestHeight(h);
-    }, 50);
-  }
-
-  if (window.ResizeObserver) {
-    new ResizeObserver(syncHeight).observe(el.card);
-  }
+  // Width is fixed at 320 and tuned to the seven-column grid, so only height
+  // is reported. The shared helper owns the ResizeObserver and Guard 1.
+  const syncHeight = window.widgetAutosize
+    ? window.widgetAutosize(el.card, { axes: 'height' })
+    : function () {};
 
   // ---------------------------------------------------------------- midnight
 
