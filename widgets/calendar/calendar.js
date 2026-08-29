@@ -312,8 +312,11 @@
   }
 
   // Hiding the widget from the tray suspends transitions and throttles timers,
-  // so transitionend may never arrive. Settle immediately instead of leaving a
+  // so transitionend may never arrive. Settle immediately rather than leaving a
   // stranded overlay for the next time the widget is shown.
+  //
+  // Only on the way out: firing on every visibility change would let an
+  // incidental flicker (occlusion, focus) cut a fade short mid-flight.
   document.addEventListener('visibilitychange', function () {
     if (document.hidden) endFade();
   });
