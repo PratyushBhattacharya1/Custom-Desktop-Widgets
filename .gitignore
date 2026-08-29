@@ -1,0 +1,18 @@
+# Dependencies
+node_modules/
+
+# Secret calendar feed URLs — these are credential-equivalent.
+# Anyone holding one of these URLs can read that calendar indefinitely.
+calendars.local.json
+
+# Personal calendar exports
+*.ical.zip
+*.ics
+
+# Build output
+dist/
+out/
+
+# Logs
+*.log
+npm-debug.log*

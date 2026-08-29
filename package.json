@@ -1,0 +1,12 @@
+{
+  "name": "desktop-widgets",
+  "version": "1.0.0",
+  "description": "Custom draggable desktop widgets (clock, calendar, email preview) built with Electron",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^31.0.0"
+  }
+}

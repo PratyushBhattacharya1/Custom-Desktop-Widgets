@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body {
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'Segoe UI', sans-serif;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+  .card {
+    width: 320px;
+    height: 340px;
+    box-sizing: border-box;
+    background: rgba(20, 20, 25, 0.55);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    padding: 18px;
+    color: #fff;
+  }
+  .header {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    text-align: center;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+  }
+  th {
+    opacity: 0.5;
+    font-weight: 400;
+    padding-bottom: 6px;
+  }
+  td {
+    text-align: center;
+    padding: 6px 0;
+    border-radius: 6px;
+  }
+  td.today {
+    background: rgba(255, 255, 255, 0.2);
+    font-weight: 700;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="header" id="month-label"></div>
+    <table>
+      <thead>
+        <tr><th>S</th><th>M</th><th>T</th><th>W</th><th>T</th><th>F</th><th>S</th></tr>
+      </thead>
+      <tbody id="grid"></tbody>
+    </table>
+  </div>
+
+  <script>
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth();
+    const today = now.getDate();
+
+    document.getElementById('month-label').textContent =
+      now.toLocaleDateString([], { month: 'long', year: 'numeric' });
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const grid = document.getElementById('grid');
+    let row = document.createElement('tr');
+    for (let i = 0; i < firstDay; i++) row.appendChild(document.createElement('td'));
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const cell = document.createElement('td');
+      cell.textContent = day;
+      if (day === today) cell.className = 'today';
+      row.appendChild(cell);
+      if ((firstDay + day) % 7 === 0) {
+        grid.appendChild(row);
+        row = document.createElement('tr');
+      }
+    }
+    if (row.children.length) grid.appendChild(row);
+  </script>
+</body>
+</html>

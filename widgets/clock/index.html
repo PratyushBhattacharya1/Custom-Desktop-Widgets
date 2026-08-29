@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body {
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'Segoe UI', sans-serif;
+    -webkit-app-region: drag; /* whole widget is draggable */
+    user-select: none;
+  }
+  .card {
+    width: 260px;
+    height: 260px;
+    box-sizing: border-box;
+    background: rgba(20, 20, 25, 0.55);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+  }
+  .time {
+    font-size: 40px;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+  .date {
+    margin-top: 6px;
+    font-size: 14px;
+    opacity: 0.7;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="time" id="time">--:--</div>
+    <div class="date" id="date">--</div>
+  </div>
+
+  <script>
+    function tick() {
+      const now = new Date();
+      document.getElementById('time').textContent =
+        now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('date').textContent =
+        now.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
+    }
+    tick();
+    setInterval(tick, 1000);
+  </script>
+</body>
+</html>

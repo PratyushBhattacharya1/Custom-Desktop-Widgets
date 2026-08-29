@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  html, body {
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family: 'Segoe UI', sans-serif;
+    -webkit-app-region: drag;
+    user-select: none;
+  }
+  .card {
+    width: 360px;
+    height: 300px;
+    box-sizing: border-box;
+    background: rgba(20, 20, 25, 0.55);
+    backdrop-filter: blur(10px);
+    border-radius: 20px;
+    padding: 18px;
+    color: #fff;
+  }
+  .header {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 10px;
+  }
+  .email-row {
+    padding: 8px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+    font-size: 13px;
+  }
+  .sender { font-weight: 600; }
+  .subject { opacity: 0.8; }
+  .note { font-size: 11px; opacity: 0.5; margin-top: 12px; line-height: 1.4; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">Inbox</div>
+    <div id="list">
+      <div class="email-row"><div class="sender">Sample Sender</div><div class="subject">This is placeholder content</div></div>
+      <div class="email-row"><div class="sender">Another Sender</div><div class="subject">Wire this up to a real inbox</div></div>
+    </div>
+    <div class="note">
+      This widget shows placeholder data. To show real email, connect it to
+      the Gmail API or Microsoft Graph API from the main process and pass
+      results in over IPC — happy to build that next.
+    </div>
+  </div>
+</body>
+</html>
