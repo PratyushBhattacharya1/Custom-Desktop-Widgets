@@ -132,11 +132,31 @@ function popup(win) {
   if (now - lastPopupAt < 300) return;
   lastPopupAt = now;
 
+  const menu = buildMenu(win);
+
+  // Widgets are non-focusable so Windows won't hand them the foreground, but a
+  // native menu dismisses on its owner losing activation — an owner that can
+  // never be activated never gets that signal, so the menu stayed open until an
+  // item was clicked and floated over other apps. Make the window activatable
+  // for the menu's lifetime only. The window is safe to activate here because
+  // the user just deliberately clicked it.
+  const wasFocusable = win.isFocusable();
+  if (!wasFocusable) win.setFocusable(true);
+
+  menu.once('menu-will-close', () => {
+    if (wasFocusable) return;
+    // Deferred: the dismissal is still being processed on this tick, and
+    // revoking activation underneath it puts the menu back in the stuck state.
+    setImmediate(() => {
+      if (!win.isDestroyed()) win.setFocusable(false);
+    });
+  });
+
   // No x/y: 'system-context-menu' reports screen coordinates while
   // 'context-menu' reports content coordinates, and popup() expects
   // window-relative. Its default — the current cursor position — is right for
   // both, and sidesteps the whole coordinate-space mismatch.
-  buildMenu(win).popup({ window: win });
+  menu.popup({ window: win });
 }
 
 // Wires both paths for one widget window.
