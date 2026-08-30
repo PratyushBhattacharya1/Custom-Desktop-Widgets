@@ -6,6 +6,7 @@ const { ipcMain, BrowserWindow, screen } = require('electron');
 const store = require('./store');
 const settings = require('./settings');
 const calendarService = require('./calendar/service');
+const gmailService = require('./gmail/service');
 
 function windowFor(event) {
   return BrowserWindow.fromWebContents(event.sender);
@@ -73,6 +74,18 @@ function register() {
   });
 
   ipcMain.handle('calendar:refresh', async () => calendarService.refresh());
+
+  // --- gmail ---
+  // Only rendered messages cross this boundary: no tokens, no client secret.
+  ipcMain.handle('gmail:get-state', () => gmailService.getState());
+  ipcMain.handle('gmail:refresh', async () => gmailService.refresh());
+  ipcMain.handle('gmail:connect', async () => {
+    try {
+      return await gmailService.connect();
+    } catch (err) {
+      return { ...gmailService.getState(), error: err.message };
+    }
+  });
 }
 
 // --- helpers the context menu drives, kept here so store writes live in one place ---
