@@ -23,6 +23,13 @@ contextBridge.exposeInMainWorld('widgetAPI', {
     ipcRenderer.on('widget:settings-changed', (_event, data) => cb(data)),
 });
 
+contextBridge.exposeInMainWorld('gmailAPI', {
+  getState: () => ipcRenderer.invoke('gmail:get-state'),
+  refresh: () => ipcRenderer.invoke('gmail:refresh'),
+  connect: () => ipcRenderer.invoke('gmail:connect'),
+  onUpdated: (cb) => ipcRenderer.on('gmail:updated', (_event, data) => cb(data)),
+});
+
 contextBridge.exposeInMainWorld('calendarAPI', {
   getMonth: (year, month) => ipcRenderer.invoke('calendar:get-month', { year, month }),
   refresh: () => ipcRenderer.invoke('calendar:refresh'),

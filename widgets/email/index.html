@@ -17,38 +17,197 @@
   .card {
     width: 360px;
     height: 300px;
-    padding: 18px;
+    padding: 30px 18px 18px;
+    display: flex;
+    flex-direction: column;
   }
   .header {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
     font-size: 16px;
     font-weight: 600;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
+    flex: 0 0 auto;
+  }
+  .count {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    opacity: 0.9;
+  }
+  .status-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    opacity: 0.5;
+    margin-left: auto;
+    align-self: center;
+  }
+  /* The list owns the remaining height and scrolls; the card itself never does. */
+  .list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-app-region: no-drag; /* a drag region would swallow scrollbar drags */
   }
   .email-row {
     padding: 8px 0;
-    border-bottom: 1px solid rgba(255,255,255,0.1);
+    border-bottom: 1px solid var(--hairline);
     font-size: 13px;
   }
-  .sender { font-weight: 600; }
-  .subject { opacity: 0.8; }
-  .note { font-size: 11px; opacity: 0.5; margin-top: 12px; line-height: 1.4; }
+  .email-row:last-child { border-bottom: 0; }
+  .sender {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .subject {
+    opacity: 0.8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .snippet {
+    font-size: 11px;
+    opacity: 0.5;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Unread carries an accent rule plus full-strength text, so it reads at a
+     glance without relying on colour alone. */
+  .email-row.unread {
+    border-left: 2px solid var(--accent);
+    padding-left: 8px;
+    margin-left: -10px;
+  }
+  .email-row.unread .sender { color: var(--accent); }
+  .email-row.unread .subject { opacity: 1; }
+  .notice {
+    font-size: 12px;
+    opacity: 0.6;
+    line-height: 1.5;
+    padding: 4px 0;
+  }
+  .notice b { font-weight: 600; opacity: 0.85; }
 </style>
 </head>
 <body>
   <div class="card">
-    <div class="header">Inbox</div>
-    <div id="list">
-      <div class="email-row"><div class="sender">Sample Sender</div><div class="subject">This is placeholder content</div></div>
-      <div class="email-row"><div class="sender">Another Sender</div><div class="subject">Wire this up to a real inbox</div></div>
+    <div class="header">
+      <span>Inbox</span>
+      <span class="count" id="count"></span>
+      <span class="status-dot" id="dot" hidden></span>
     </div>
-    <div class="note">
-      This widget shows placeholder data. To show real email, connect it to
-      the Gmail API or Microsoft Graph API from the main process and pass
-      results in over IPC — happy to build that next.
+    <div class="list thin-scroll" id="list">
+      <div class="notice">Loading…</div>
     </div>
   </div>
+
+  <!-- Shared helpers first: the inline script below calls window.widgetAutosize. -->
   <script src="../shared/autosize.js"></script>
   <script src="../shared/settings.js"></script>
   <script src="../shared/pin.js"></script>
+  <script>
+    (function () {
+      const list = document.getElementById('list');
+      const count = document.getElementById('count');
+      const dot = document.getElementById('dot');
+
+      function notice(html) {
+        list.textContent = '';
+        const div = document.createElement('div');
+        div.className = 'notice';
+        // Static, author-controlled strings only — never message content.
+        div.innerHTML = html;
+        list.appendChild(div);
+      }
+
+      function relative(ms) {
+        if (!ms) return '';
+        const mins = Math.round((Date.now() - ms) / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return mins + 'm ago';
+        const hrs = Math.round(mins / 60);
+        if (hrs < 24) return hrs + 'h ago';
+        return Math.round(hrs / 24) + 'd ago';
+      }
+
+      function render(s) {
+        if (!s) return;
+
+        const unread = s.messages.filter(function (m) { return m.unread; }).length;
+        count.textContent = unread ? unread + ' unread' : '';
+
+        dot.hidden = !(s.stale || s.needsReconnect);
+        dot.title = s.needsReconnect
+          ? 'Gmail needs reconnecting'
+          : 'Showing cached mail' + (s.lastSuccessAt ? ' — updated ' + relative(s.lastSuccessAt) : '');
+
+        if (s.needsSetup) {
+          notice('Gmail isn\'t configured. Add your OAuth client to <b>gmail.local.json</b>.');
+          return;
+        }
+        if (s.needsReconnect && !s.messages.length) {
+          notice('Not connected. Right-click → <b>Connect Gmail…</b>');
+          return;
+        }
+        if (!s.messages.length) {
+          notice(s.error ? 'Couldn\'t reach Gmail. Showing nothing yet.' : 'No messages.');
+          return;
+        }
+
+        list.textContent = '';
+
+        // The token expires weekly under Testing status; say so plainly rather
+        // than letting the list quietly go stale.
+        if (s.needsReconnect) {
+          const banner = document.createElement('div');
+          banner.className = 'notice';
+          banner.innerHTML = 'Access expired — right-click → <b>Reconnect Gmail…</b>';
+          list.appendChild(banner);
+        }
+
+        s.messages.forEach(function (m) {
+          const row = document.createElement('div');
+          row.className = 'email-row' + (m.unread ? ' unread' : '');
+
+          const sender = document.createElement('div');
+          sender.className = 'sender';
+          // textContent throughout: mail is external data, never markup.
+          sender.textContent = m.from;
+
+          const subject = document.createElement('div');
+          subject.className = 'subject';
+          subject.textContent = m.subject;
+
+          const snippet = document.createElement('div');
+          snippet.className = 'snippet';
+          snippet.textContent = m.snippet;
+
+          row.appendChild(sender);
+          row.appendChild(subject);
+          if (m.snippet) row.appendChild(snippet);
+          row.title = m.subject;
+          list.appendChild(row);
+        });
+      }
+
+      if (!window.gmailAPI) {
+        notice('Gmail bridge unavailable.');
+        return;
+      }
+      window.gmailAPI.getState().then(render).catch(function () {});
+      window.gmailAPI.onUpdated(render);
+
+      // Exposed purely so the verification harness can drive the widget.
+      window.__mail = { render: render };
+    })();
+  </script>
 </body>
 </html>

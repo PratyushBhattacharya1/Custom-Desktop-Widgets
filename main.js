@@ -4,6 +4,7 @@ const store = require('./src/main/store');
 const ipc = require('./src/main/ipc');
 const widgetMenu = require('./src/main/menu');
 const calendarService = require('./src/main/calendar/service');
+const gmailService = require('./src/main/gmail/service');
 
 // ---- Add / remove widgets here ----
 const WIDGETS = [
@@ -141,6 +142,14 @@ app.whenReady().then(() => {
     const cal = windows.calendar;
     if (cal && !cal.isDestroyed() && !cal.webContents.isDestroyed()) {
       cal.webContents.send('calendar:updated', payload);
+    }
+  });
+
+  gmailService.init();
+  gmailService.onUpdated(() => {
+    const mail = windows.email;
+    if (mail && !mail.isDestroyed() && !mail.webContents.isDestroyed()) {
+      mail.webContents.send('gmail:updated', gmailService.getState());
     }
   });
 

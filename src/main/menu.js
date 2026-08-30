@@ -16,6 +16,7 @@
 const { app, Menu } = require('electron');
 const settings = require('./settings');
 const ipc = require('./ipc');
+const gmailService = require('./gmail/service');
 
 function widgetLabel(id) {
   return id.charAt(0).toUpperCase() + id.slice(1);
@@ -65,6 +66,24 @@ function buildMenu(win) {
 
   // Scaling type only works where the window refits around the result.
   if (caps.size) template.push({ label: 'Size', submenu: sizes });
+
+  // The email widget carries its own connection controls: under Testing status
+  // Google expires the refresh token weekly, so reconnecting is routine.
+  if (id === 'email') {
+    const mail = gmailService.getState();
+    template.push(
+      { type: 'separator' },
+      {
+        label: mail.connected ? 'Reconnect Gmail…' : 'Connect Gmail…',
+        click: () => { gmailService.connect().catch(() => {}); },
+      },
+      {
+        label: 'Refresh now',
+        enabled: mail.connected,
+        click: () => { gmailService.refresh().catch(() => {}); },
+      }
+    );
+  }
 
   template.push(
     { type: 'separator' },
