@@ -137,35 +137,6 @@ function popup(win) {
 
   const menu = buildMenu(win);
 
-  // Widgets carry WS_EX_NOACTIVATE (focusable:false) so Windows won't hand them
-  // the foreground on its own. A popup menu, though, is dismissed by Windows
-  // only when its OWNER is the foreground window — being merely activatable
-  // isn't enough. That distinction is why a half-fix behaved worse than none:
-  // clicking the widget cancelled the menu (the click reached the owner) while
-  // clicking the desktop did nothing at all.
-  //
-  // So for the menu's lifetime the window is made activatable AND actually
-  // focused. Raising it here is fine: the user just right-clicked it.
-  const wasFocusable = win.isFocusable();
-  if (!wasFocusable) {
-    win.setFocusable(true);
-    // Clearing NOACTIVATE lets the shell put the window back on the taskbar —
-    // Electron implements skipTaskbar through ITaskbarList rather than a style
-    // bit, so it has to be re-asserted after any style change.
-    win.setSkipTaskbar(true);
-  }
-  win.focus();
-
-  menu.once('menu-will-close', () => {
-    // Deferred: the dismissal is still being processed on this tick, and
-    // revoking activation underneath it puts the menu back in the stuck state.
-    setImmediate(() => {
-      if (win.isDestroyed()) return;
-      if (!wasFocusable) win.setFocusable(false);
-      win.setSkipTaskbar(true);
-    });
-  });
-
   // No x/y: 'system-context-menu' reports screen coordinates while
   // 'context-menu' reports content coordinates, and popup() expects
   // window-relative. Its default — the current cursor position — is right for

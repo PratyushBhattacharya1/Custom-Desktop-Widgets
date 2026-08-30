@@ -32,12 +32,13 @@ function createWidget(widget) {
     hasShadow: false,
     skipTaskbar: true,     // don't clutter the taskbar with widgets
     alwaysOnTop: false,    // normal z-order — widgets behave like ordinary windows
-    // Widgets are never a place you type, and being activatable made Windows
-    // hand them the foreground whenever it had to pick a window — closing an
-    // app, switching virtual desktops, opening a file dialog — which surfaced
-    // them over whatever was in front. Mouse input is unaffected; only OS
-    // keyboard focus is given up.
-    focusable: false,
+    // NOTE: focusable:false was tried here to stop Windows handing widgets the
+    // foreground when it picks a window (closing an app, switching desktops).
+    // It broke the context menu instead: WS_EX_NOACTIVATE means the owner can
+    // never be the foreground window, and Windows only dismisses a popup menu
+    // when its owner is foreground. Forcing it with focus() is refused for a
+    // process without foreground rights, and Windows answers that refusal by
+    // flashing taskbar buttons. Correct menus beat occasional surfacing.
     show: false,           // shown on ready-to-show to avoid a flash of unpositioned content
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
