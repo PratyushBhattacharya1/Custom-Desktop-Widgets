@@ -137,21 +137,32 @@ function popup(win) {
 
   const menu = buildMenu(win);
 
-  // Widgets are non-focusable so Windows won't hand them the foreground, but a
-  // native menu dismisses on its owner losing activation — an owner that can
-  // never be activated never gets that signal, so the menu stayed open until an
-  // item was clicked and floated over other apps. Make the window activatable
-  // for the menu's lifetime only. The window is safe to activate here because
-  // the user just deliberately clicked it.
+  // Widgets carry WS_EX_NOACTIVATE (focusable:false) so Windows won't hand them
+  // the foreground on its own. A popup menu, though, is dismissed by Windows
+  // only when its OWNER is the foreground window — being merely activatable
+  // isn't enough. That distinction is why a half-fix behaved worse than none:
+  // clicking the widget cancelled the menu (the click reached the owner) while
+  // clicking the desktop did nothing at all.
+  //
+  // So for the menu's lifetime the window is made activatable AND actually
+  // focused. Raising it here is fine: the user just right-clicked it.
   const wasFocusable = win.isFocusable();
-  if (!wasFocusable) win.setFocusable(true);
+  if (!wasFocusable) {
+    win.setFocusable(true);
+    // Clearing NOACTIVATE lets the shell put the window back on the taskbar —
+    // Electron implements skipTaskbar through ITaskbarList rather than a style
+    // bit, so it has to be re-asserted after any style change.
+    win.setSkipTaskbar(true);
+  }
+  win.focus();
 
   menu.once('menu-will-close', () => {
-    if (wasFocusable) return;
     // Deferred: the dismissal is still being processed on this tick, and
     // revoking activation underneath it puts the menu back in the stuck state.
     setImmediate(() => {
-      if (!win.isDestroyed()) win.setFocusable(false);
+      if (win.isDestroyed()) return;
+      if (!wasFocusable) win.setFocusable(false);
+      win.setSkipTaskbar(true);
     });
   });
 
