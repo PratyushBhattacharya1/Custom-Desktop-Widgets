@@ -152,15 +152,21 @@ function connect() {
           '<p>' + message + '</p></body>');
       };
 
-      if (url.searchParams.get('error')) {
-        reply('Authorisation was declined. You can close this tab.');
-        finish(new Error(url.searchParams.get('error')));
-        return;
-      }
-      // Guards against another local process hitting the loopback port.
+      // State is checked first, on every response including errors. RFC 6749
+      // requires it on error responses too, and checking it second would let
+      // any local process or web page abort a live consent flow by hitting the
+      // loopback port with ?error=.
       if (url.searchParams.get('state') !== stateToken) {
         reply('Unexpected response. You can close this tab.');
-        finish(new Error('state_mismatch'));
+        // Not finish(): an unrelated caller must not kill a genuine flow.
+        return;
+      }
+      const oauthError = url.searchParams.get('error');
+      if (oauthError) {
+        reply('Authorisation was declined. You can close this tab.');
+        // Redacted like every other path — this string is attacker-influenced
+        // and is surfaced to the renderer.
+        finish(new Error(redact(oauthError)));
         return;
       }
       const code = url.searchParams.get('code');
@@ -209,7 +215,11 @@ function connect() {
         access_type: 'offline',
         prompt: 'consent',
       });
-      shell.openExternal(AUTH_URL + '?' + params.toString());
+      // Fire-and-forget would strand the flow: with no default browser or a
+      // policy block there would be no tab, no error, and a socket listening
+      // for five minutes.
+      shell.openExternal(AUTH_URL + '?' + params.toString())
+        .catch((err) => finish(new Error('Could not open a browser: ' + redact(err.message))));
     });
   });
 
@@ -222,10 +232,23 @@ let accessToken = null;
 let accessExpiry = 0;
 
 function cacheAccessToken(tokens) {
-  if (!tokens || !tokens.access_token) return;
+  if (!tokens || !tokens.access_token) return false;
   accessToken = tokens.access_token;
-  // Expire a minute early so a call can't land on a just-dead token.
-  accessExpiry = Date.now() + (Number(tokens.expires_in || 3600) - 60) * 1000;
+  // Expire a minute early so a call can't land on a just-dead token. A missing
+  // or non-numeric expires_in falls back to an hour rather than producing NaN,
+  // which would make the freshness check permanently false.
+  const ttl = Number(tokens.expires_in);
+  const seconds = Number.isFinite(ttl) && ttl > 0 ? ttl : 3600;
+  accessExpiry = Date.now() + (seconds - 60) * 1000;
+  return true;
+}
+
+// Drops the cached access token without touching the refresh token, so the
+// next call mints a fresh one. Used when the API rejects a token that the
+// refresh grant still considers valid.
+function forgetAccessToken() {
+  accessToken = null;
+  accessExpiry = 0;
 }
 
 // Throws an error carrying needsReconnect when the refresh token is gone or
@@ -255,7 +278,11 @@ async function getAccessToken() {
       refresh_token: refresh,
       grant_type: 'refresh_token',
     });
-    cacheAccessToken(tokens);
+    // A 2xx without an access_token would otherwise leave the previous (or
+    // null) value in place and send "Bearer null" on the next call.
+    if (!cacheAccessToken(tokens)) {
+      throw new Error('Token refresh returned no access token');
+    }
     return accessToken;
   } catch (err) {
     if (err.oauthError === 'invalid_grant') {
@@ -281,6 +308,7 @@ function disconnect() {
 module.exports = {
   connect,
   disconnect,
+  forgetAccessToken,
   isConnected,
   getAccessToken,
   redact,

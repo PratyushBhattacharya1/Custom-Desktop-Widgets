@@ -75,12 +75,15 @@ function buildMenu(win) {
       { type: 'separator' },
       {
         label: mail.connected ? 'Reconnect Gmail…' : 'Connect Gmail…',
-        click: () => { gmailService.connect().catch(() => {}); },
+        // Swallowing this made every failure invisible: the menu is the only
+        // trigger, and the failing path never reaches the code that emits an
+        // update. Record it so the widget can say something went wrong.
+        click: () => { gmailService.connect().catch((err) => gmailService.reportError(err)); },
       },
       {
         label: 'Refresh now',
         enabled: mail.connected,
-        click: () => { gmailService.refresh().catch(() => {}); },
+        click: () => { gmailService.refresh().catch((err) => gmailService.reportError(err)); },
       }
     );
   }

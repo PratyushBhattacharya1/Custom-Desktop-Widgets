@@ -49,8 +49,10 @@ function load() {
     ok: true,
     clientId,
     clientSecret,
+    // Clamped at both ends: setInterval takes a 32-bit delay, so anything past
+    // ~24 days silently becomes a 1ms timer and hammers the API.
     refreshMinutes: Number.isFinite(refreshMinutes) && refreshMinutes >= 1
-      ? refreshMinutes : DEFAULTS.refreshMinutes,
+      ? Math.min(refreshMinutes, 1440) : DEFAULTS.refreshMinutes,
     maxMessages: Number.isFinite(maxMessages) && maxMessages >= 1
       ? Math.min(Math.round(maxMessages), 50) : DEFAULTS.maxMessages,
     query: typeof raw.query === 'string' && raw.query.trim() ? raw.query.trim() : DEFAULTS.query,
