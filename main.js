@@ -31,6 +31,12 @@ function createWidget(widget) {
     hasShadow: false,
     skipTaskbar: true,     // don't clutter the taskbar with widgets
     alwaysOnTop: false,    // normal z-order — widgets behave like ordinary windows
+    // Widgets are never a place you type, and being activatable made Windows
+    // hand them the foreground whenever it had to pick a window — closing an
+    // app, switching virtual desktops, opening a file dialog — which surfaced
+    // them over whatever was in front. Mouse input is unaffected; only OS
+    // keyboard focus is given up.
+    focusable: false,
     show: false,           // shown on ready-to-show to avoid a flash of unpositioned content
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
