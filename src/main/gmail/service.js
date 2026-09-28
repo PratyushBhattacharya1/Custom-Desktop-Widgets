@@ -22,8 +22,14 @@ const state = {
   error: null,
 };
 
+// Re-minting an access token fixes a token that simply went bad; it cannot fix
+// a rejection that is really about the grant (a narrowed scope, a disabled API).
+// A few identical failures in a row mean the latter.
+const MAX_AUTH_FAILURES = 3;
+
 let timer = null;
-let inFlight = false;
+let inFlight = null;
+let authFailures = 0;
 const listeners = [];
 
 function onUpdated(fn) { listeners.push(fn); }
@@ -79,20 +85,23 @@ function apiGet(url, token) {
             reason = (detail && detail.reason) || (parsed && parsed.error && parsed.error.status) || '';
           } catch { /* fall through to the status-only decision */ }
 
-          const transient = /rateLimit|quotaExceeded|backendError|userRateLimitExceeded/i.test(reason);
+          // Both spellings have to match. errors[].reason is camelCase, and
+          // when Google omits that array the only clue is error.status, which
+          // is SCREAMING_SNAKE — a camelCase-only pattern never matched it, so
+          // a plain quota response was read as a credential failure.
+          // rateLimit already covers rateLimitExceeded and userRateLimitExceeded.
+          const transient = /rateLimit|quotaExceeded|dailyLimitExceeded|backendError/i.test(reason)
+            || /^(RESOURCE_EXHAUSTED|UNAVAILABLE|INTERNAL)$/.test(reason);
           const err = new Error(transient
             ? 'Gmail is rate limiting requests'
             : 'Gmail rejected the token' + (reason ? ' (' + reason + ')' : ''));
           // Only a genuine credential problem should reach the disconnect path.
           if (!transient) err.authFailed = true;
-          err.retryable = transient;
           reject(err);
           return;
         }
         if (status < 200 || status >= 300) {
-          const err = new Error('Gmail returned ' + status);
-          err.retryable = status >= 500 || status === 429;
-          reject(err);
+          reject(new Error('Gmail returned ' + status));
           return;
         }
         try { resolve(JSON.parse(text)); } catch { reject(new Error('Malformed Gmail response')); }
@@ -172,14 +181,13 @@ async function fetchMessages() {
   // is broadly wrong. Keep the cache rather than replacing a full inbox with an
   // empty one that claims to be current.
   if (ids.length && !messages.length) {
-    const err = new Error('Gmail returned no readable messages');
-    err.retryable = true;
-    throw err;
+    throw new Error('Gmail returned no readable messages');
   }
 
   state.messages = messages;
   state.needsReconnect = false;
   state.needsSetup = false;
+  authFailures = 0; // the token worked, whatever went wrong before
 
   if (failed) {
     // Partial results are worth showing, but they are not a fresh snapshot:
@@ -195,33 +203,49 @@ async function fetchMessages() {
   return true;
 }
 
-async function refresh() {
-  if (inFlight) return getState();
-  inFlight = true;
+// A concurrent caller joins the run in progress rather than being handed the
+// snapshot from before it. Returning early used to mean connect() decided
+// whether to keep polling from state its own fetch had not touched yet, and
+// that no update was emitted for the caller at all.
+function refresh() {
+  if (inFlight) return inFlight;
+  inFlight = runRefresh().finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+// Never rejects: every failure is recorded on state and emitted, because that
+// is the only way the widget hears about one.
+async function runRefresh() {
   try {
     // Only a complete fetch is allowed to overwrite the cache; a partial one
     // would replace known-good mail with a short list.
     if (await fetchMessages()) writeCache();
   } catch (err) {
-    if (err.needsSetup) {
+    if (err && err.needsSetup) {
       state.needsSetup = true;
-    } else if (err.needsReconnect) {
+    } else if (err && err.needsReconnect) {
       // The refresh grant was rejected — the authoritative signal that the
       // credential is dead. Expected roughly weekly under Testing status.
       // auth.getAccessToken has already cleared the stored token.
       state.needsReconnect = true;
       stopPolling(); // nothing will succeed until the user reconnects
-    } else if (err.authFailed) {
+    } else if (err && err.authFailed) {
       // The API rejected the access token without the refresh grant failing.
       // Drop only the cached access token and let the next cycle re-mint one;
       // deleting the refresh token here would turn a hiccup into a re-consent.
       auth.forgetAccessToken();
-      state.needsReconnect = !auth.isConnected();
+      authFailures += 1;
+      // But a fresh token is identical to the rejected one when the grant
+      // itself is the problem, so stop asking and put something on screen the
+      // user can act on instead of polling a closed door forever.
+      if (authFailures >= MAX_AUTH_FAILURES || !auth.isConnected()) {
+        state.needsReconnect = true;
+        stopPolling();
+      }
     }
     state.stale = true;
-    state.error = auth.redact(err.message);
+    state.error = auth.redact((err && err.message) || 'Something went wrong');
   } finally {
-    inFlight = false;
     emit();
   }
   return getState();
@@ -244,9 +268,21 @@ async function connect() {
   // Reload first. A startup with a missing or placeholder config caches a
   // negative result, and auth.connect() rejects on it — so reloading afterwards
   // was unreachable and fixing the file could only be picked up by restarting.
-  config.reload();
-  state.needsSetup = false;
+  const cfg = config.reload();
+  // Only a config that now reads cleanly clears the notice. auth.connect()
+  // rejects with a plain Error, so nothing downstream could have put it back.
+  state.needsSetup = !cfg.ok;
   await auth.connect();
+
+  // Let a poll that started before consent finish first, so the fetch the
+  // decision below rests on is the one that used this new credential.
+  if (inFlight) await inFlight;
+  // Only then clear the flags an earlier failure left behind: a credential was
+  // just stored, so they no longer describe anything. Clearing them is what
+  // lets a transient error in the fetch below still leave polling switched on.
+  state.needsReconnect = false;
+  authFailures = 0;
+
   const result = await refresh();
   // refresh() halts polling when it lands in a state nothing will recover from
   // (a declined scope, say); don't restart the timer it just stopped.

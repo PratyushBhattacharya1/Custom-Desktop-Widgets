@@ -171,6 +171,14 @@
           banner.className = 'notice';
           banner.innerHTML = 'Access expired — right-click → <b>Reconnect Gmail…</b>';
           list.appendChild(banner);
+        } else if (s.error) {
+          // With mail already on screen this was the one state with no visible
+          // sign at all — the dot said "Showing cached mail" and nothing else.
+          const problem = document.createElement('div');
+          problem.className = 'notice';
+          // textContent: redacted API text is still external data, not markup.
+          problem.textContent = s.error;
+          list.appendChild(problem);
         }
 
         s.messages.forEach(function (m) {

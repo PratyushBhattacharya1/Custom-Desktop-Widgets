@@ -83,7 +83,10 @@ function register() {
     try {
       return await gmailService.connect();
     } catch (err) {
-      return { ...gmailService.getState(), error: err.message };
+      // The same path the menu takes. Returning err.message directly was the
+      // one error string in the module that skipped redact(), and it told only
+      // this caller: nothing was emitted, so the widget never heard about it.
+      return gmailService.reportError(err);
     }
   });
 }

@@ -83,7 +83,10 @@ function buildMenu(win) {
       {
         label: 'Refresh now',
         enabled: mail.connected,
-        click: () => { gmailService.refresh().catch((err) => gmailService.reportError(err)); },
+        // No catch: refresh() records and emits its own failures and always
+        // resolves, so a handler here could never run. connect() is the one
+        // that rejects, which is why only it needs rescuing.
+        click: () => { gmailService.refresh(); },
       }
     );
   }
@@ -135,13 +138,11 @@ function popup(win) {
   if (now - lastPopupAt < 300) return;
   lastPopupAt = now;
 
-  const menu = buildMenu(win);
-
   // No x/y: 'system-context-menu' reports screen coordinates while
   // 'context-menu' reports content coordinates, and popup() expects
   // window-relative. Its default — the current cursor position — is right for
   // both, and sidesteps the whole coordinate-space mismatch.
-  menu.popup({ window: win });
+  buildMenu(win).popup({ window: win });
 }
 
 // Wires both paths for one widget window.

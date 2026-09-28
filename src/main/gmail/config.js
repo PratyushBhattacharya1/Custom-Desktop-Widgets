@@ -49,8 +49,10 @@ function load() {
     ok: true,
     clientId,
     clientSecret,
-    // Clamped at both ends: setInterval takes a 32-bit delay, so anything past
-    // ~24 days silently becomes a 1ms timer and hammers the API.
+    // A day is the longest gap that still reads as a live widget, and it stays
+    // well clear of setInterval's 32-bit delay (~24 days), past which a timer
+    // silently fires every millisecond. Anything under a minute is treated as
+    // a mistake and falls back to the default rather than being clamped.
     refreshMinutes: Number.isFinite(refreshMinutes) && refreshMinutes >= 1
       ? Math.min(refreshMinutes, 1440) : DEFAULTS.refreshMinutes,
     maxMessages: Number.isFinite(maxMessages) && maxMessages >= 1
