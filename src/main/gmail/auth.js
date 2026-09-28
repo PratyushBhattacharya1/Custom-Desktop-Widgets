@@ -29,18 +29,27 @@ function b64url(buf) {
 
 // --- refresh token at rest -------------------------------------------------
 
+// Mirrors whether a usable token is on disk, so isConnected() doesn't have to
+// unwrap the credential to answer a yes/no question — it is asked on every
+// state read and, synchronously, on every context-menu popup. null: not yet
+// looked.
+let connected = null;
+
 function saveRefreshToken(token) {
   try {
     if (safeStorage.isEncryptionAvailable()) {
       fs.writeFileSync(TOKEN_PATH, safeStorage.encryptString(token));
+      connected = true;
       return true;
     }
     // Refusing is the right call: writing a long-lived mailbox credential in
     // cleartext is worse than making the user reconnect each launch.
     console.warn('Gmail: OS encryption unavailable; refresh token not stored.');
+    connected = false;
     return false;
   } catch (err) {
     console.error('Gmail: failed to store refresh token:', redact(err.message));
+    connected = false;
     return false;
   }
 }
@@ -60,10 +69,14 @@ function clearRefreshToken() {
   try {
     if (fs.existsSync(TOKEN_PATH)) fs.unlinkSync(TOKEN_PATH);
   } catch { /* nothing useful to do */ }
+  connected = false;
 }
 
 function isConnected() {
-  return Boolean(loadRefreshToken());
+  // Decrypted once; every write to the file goes through the two functions
+  // above, so the flag can't drift from what is stored.
+  if (connected === null) connected = Boolean(loadRefreshToken());
+  return connected;
 }
 
 // --- HTTP ------------------------------------------------------------------
@@ -128,6 +141,9 @@ function connect() {
 
     const server = http.createServer();
     let settled = false;
+    // A refused response is not acted on, but it is remembered, so the timeout
+    // below can say which of the two things happened.
+    let sawMismatch = false;
 
     const finish = (err, value) => {
       if (settled) return;
@@ -139,7 +155,9 @@ function connect() {
     };
 
     // Consent can be abandoned; don't leave a listening socket behind.
-    const timeout = setTimeout(() => finish(new Error('Authorisation timed out')), 5 * 60 * 1000);
+    const timeout = setTimeout(() => finish(new Error(sawMismatch
+      ? 'The authorisation response did not match this request — try connecting again.'
+      : 'Authorisation timed out')), 5 * 60 * 1000);
 
     server.on('request', async (req, res) => {
       const url = new URL(req.url, 'http://127.0.0.1');
@@ -152,19 +170,34 @@ function connect() {
           '<p>' + message + '</p></body>');
       };
 
-      if (url.searchParams.get('error')) {
-        reply('Authorisation was declined. You can close this tab.');
-        finish(new Error(url.searchParams.get('error')));
-        return;
-      }
-      // Guards against another local process hitting the loopback port.
+      // State is checked first, on every response including errors. RFC 6749
+      // requires it on error responses too, and checking it second would let
+      // any local process or web page abort a live consent flow by hitting the
+      // loopback port with ?error=.
       if (url.searchParams.get('state') !== stateToken) {
         reply('Unexpected response. You can close this tab.');
-        finish(new Error('state_mismatch'));
+        // Not finish(): an unrelated caller must not kill a genuine flow. It
+        // only changes what the timeout reports if nothing valid ever arrives.
+        sawMismatch = true;
+        return;
+      }
+      const oauthError = url.searchParams.get('error');
+      if (oauthError) {
+        reply('Authorisation was declined. You can close this tab.');
+        // Redacted like every other path — this string is attacker-influenced
+        // and is surfaced to the renderer.
+        finish(new Error(redact(oauthError)));
         return;
       }
       const code = url.searchParams.get('code');
-      if (!code) { reply('No authorisation code. You can close this tab.'); return; }
+      if (!code) {
+        // The state matched, so this is our redirect and it carried neither a
+        // code nor an error. Nothing else is coming; waiting out the five
+        // minutes would only look like a hang.
+        reply('No authorisation code. You can close this tab.');
+        finish(new Error('no_authorisation_code'));
+        return;
+      }
 
       try {
         const port = server.address().port;
@@ -209,7 +242,11 @@ function connect() {
         access_type: 'offline',
         prompt: 'consent',
       });
-      shell.openExternal(AUTH_URL + '?' + params.toString());
+      // Fire-and-forget would strand the flow: with no default browser or a
+      // policy block there would be no tab, no error, and a socket listening
+      // for five minutes.
+      shell.openExternal(AUTH_URL + '?' + params.toString())
+        .catch((err) => finish(new Error('Could not open a browser: ' + redact(err.message))));
     });
   });
 
@@ -222,10 +259,25 @@ let accessToken = null;
 let accessExpiry = 0;
 
 function cacheAccessToken(tokens) {
-  if (!tokens || !tokens.access_token) return;
+  if (!tokens || !tokens.access_token) return false;
   accessToken = tokens.access_token;
-  // Expire a minute early so a call can't land on a just-dead token.
-  accessExpiry = Date.now() + (Number(tokens.expires_in || 3600) - 60) * 1000;
+  // Expire a minute early so a call can't land on a just-dead token. A missing
+  // or non-numeric expires_in falls back to an hour rather than producing NaN,
+  // which would make the freshness check permanently false — and the margin is
+  // capped at half the lifetime, so a short TTL can't expire the token before
+  // it was issued and turn every API call into a token request.
+  const ttl = Number(tokens.expires_in);
+  const seconds = Number.isFinite(ttl) && ttl > 0 ? ttl : 3600;
+  accessExpiry = Date.now() + (seconds - Math.min(60, seconds / 2)) * 1000;
+  return true;
+}
+
+// Drops the cached access token without touching the refresh token, so the
+// next call mints a fresh one. Used when the API rejects a token that the
+// refresh grant still considers valid.
+function forgetAccessToken() {
+  accessToken = null;
+  accessExpiry = 0;
 }
 
 // Throws an error carrying needsReconnect when the refresh token is gone or
@@ -255,7 +307,11 @@ async function getAccessToken() {
       refresh_token: refresh,
       grant_type: 'refresh_token',
     });
-    cacheAccessToken(tokens);
+    // A 2xx without an access_token would otherwise leave the previous (or
+    // null) value in place and send "Bearer null" on the next call.
+    if (!cacheAccessToken(tokens)) {
+      throw new Error('Token refresh returned no access token');
+    }
     return accessToken;
   } catch (err) {
     if (err.oauthError === 'invalid_grant') {
@@ -281,6 +337,7 @@ function disconnect() {
 module.exports = {
   connect,
   disconnect,
+  forgetAccessToken,
   isConnected,
   getAccessToken,
   redact,
