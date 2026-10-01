@@ -1,0 +1,22 @@
+name: Change
+description: A feature, improvement, refactor or chore.
+body:
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The problem this solves or the goal it serves.
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What should change
+      description: The behaviour you want. Leave out implementation unless it matters.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: How you'll check that it works.
