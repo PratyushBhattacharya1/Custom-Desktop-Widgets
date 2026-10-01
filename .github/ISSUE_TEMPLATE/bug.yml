@@ -1,0 +1,41 @@
+name: Bug
+description: Something is broken or behaves wrongly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Issues are public. Leave out calendar feed URLs, OAuth client secrets,
+        tokens and email contents: a secret iCal URL gives anyone who has it
+        permanent read access to that calendar.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Clock
+        - Calendar
+        - Email
+        - Tray or context menu
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1.
+        2.
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or screenshots
+      description: Redact feed URLs and tokens first.

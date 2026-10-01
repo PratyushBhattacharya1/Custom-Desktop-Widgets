@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Supersede stale runs on a PR, but let every run on main finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The job id is the name of a required status check in
+  # .github/rulesets/main.json. Rename one without the other and every PR
+  # waits for a check that never reports.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          # Electron 31 embeds Node 20. Move this with the electron devDependency.
+          node-version: 20
+
+      - name: Syntax, JSON and secret checks
+        run: node scripts/check.js
+
+      - name: Load the ICS parser
+        # The regression suite needs the personal Google export, which is never
+        # committed. Without it, verify-ics.js still requires every parser
+        # module and then exits 0, so this step catches a module that fails to
+        # load, and nothing more.
+        run: node scripts/verify-ics.js
