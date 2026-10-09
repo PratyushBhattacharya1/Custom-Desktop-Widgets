@@ -1,12 +1,12 @@
-// Static checks for the whole repository. CI runs this on every push and pull
-// request; run it before pushing.
+// Static checks for the whole repository. CI runs this on every pull request
+// and every push to main, not on other branch pushes; run it before pushing.
 //
 //   node scripts/check.js
 //
 // Plain Node, no Electron, no network. It checks the files a commit could
 // include (tracked, plus untracked ones that aren't gitignored), so the
 // gitignored credentials on a developer's machine are never opened.
-const { execFileSync, spawnSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -17,7 +17,9 @@ const annotate = process.env.GITHUB_ACTIONS === 'true';
 let failures = 0;
 
 // Workflow-command escaping, so a message can't break the annotation syntax.
+// Properties such as file= also need `:` and `,`, which separate them.
 const escapeData = (s) => String(s).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+const escapeProperty = (s) => escapeData(s).replace(/:/g, '%3A').replace(/,/g, '%2C');
 
 function report(name, problems, detail) {
   if (problems.length === 0) {
@@ -30,7 +32,7 @@ function report(name, problems, detail) {
     console.log('      ' + p.file + (p.line ? ':' + p.line : '') + '  ' + p.message);
     // An annotation pins the failure to its line in the PR's diff view.
     if (annotate) {
-      console.log('::error file=' + p.file + (p.line ? ',line=' + p.line : '') + '::' + escapeData(p.message));
+      console.log('::error file=' + escapeProperty(p.file) + (p.line ? ',line=' + p.line : '') + '::' + escapeData(p.message));
     }
   }
 }
@@ -46,29 +48,42 @@ const read = (f) => fs.readFileSync(path.join(root, f), 'utf8');
 const lineOf = (text) => (/:(\d+)\r?\n/.exec(text) || [])[1];
 
 // ---------------------------------------------------------------- JavaScript
-// node --check parses each file the way Node loads it (CommonJS here).
+// Compiled in-process without running, rather than a node --check process per
+// file. Files under widgets/ are classic browser scripts, so vm.Script compiles
+// them the way Chromium does: a top-level `return`, which CommonJS accepts, is
+// an error there. Everything else is CommonJS, which Node's loader wraps in a
+// function, and compileFunction does the same.
+const CJS_PARAMS = ['exports', 'require', 'module', '__filename', '__dirname'];
 const jsFiles = files.filter((f) => f.endsWith('.js'));
 const jsProblems = [];
 for (const f of jsFiles) {
-  const r = spawnSync(process.execPath, ['--check', f], { cwd: root, encoding: 'utf8' });
-  if (r.status !== 0) {
-    const msg = /^\w*Error: .*$/m.exec(r.stderr || '');
-    jsProblems.push({ file: f, line: lineOf(r.stderr || ''), message: msg ? msg[0] : 'node --check failed' });
+  try {
+    if (f.startsWith('widgets/')) new vm.Script(read(f), { filename: f });
+    else vm.compileFunction(read(f), CJS_PARAMS, { filename: f });
+  } catch (err) {
+    jsProblems.push({ file: f, line: lineOf(err.stack || ''), message: err.name + ': ' + err.message });
   }
 }
 report('JavaScript parses', jsProblems, jsFiles.length + ' files');
 
 // ------------------------------------------------------------ inline scripts
 // The clock and email widgets keep their code in inline <script> blocks, which
-// node --check never sees. vm.Script compiles each block as a classic browser
+// the .js pass never sees. vm.Script compiles each block as a classic browser
 // script without running it; lineOffset makes errors point at the HTML line.
+// Only classic scripts are compiled: vm.Script can't parse a module, and JSON,
+// importmap and template blocks aren't JavaScript. Attribute names must start
+// after whitespace, so data-src= isn't mistaken for src=. A browser ends the
+// block at any </script followed by whitespace, / or >, even </script foo>.
+const CLASSIC_TYPE = /^\s*(?:(?:text|application)\/(?:java|ecma)script)?\s*$/i;
 const htmlFiles = files.filter((f) => f.endsWith('.html'));
 const inlineProblems = [];
 let inlineBlocks = 0;
 for (const f of htmlFiles) {
   const html = read(f);
-  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi)) {
-    if (/\bsrc\s*=/i.test(m[1]) || m[2].trim() === '') continue;
+  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi)) {
+    if (/(?:^|\s)src\s*=/i.test(m[1]) || m[2].trim() === '') continue;
+    const type = /(?:^|\s)type\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i.exec(m[1]);
+    if (type && !CLASSIC_TYPE.test(type[1] ?? type[2] ?? type[3])) continue;
     inlineBlocks++;
     const bodyStart = m.index + m[0].indexOf('>') + 1;
     const startLine = html.slice(0, bodyStart).split('\n').length;
@@ -97,6 +112,9 @@ report('JSON parses', jsonProblems, jsonFiles.length + ' files');
 // ------------------------------------------------------------------- secrets
 // .gitignore keeps these out of `git add`, but not out of `git add -f`.
 const PRIVATE_FILE = /(^|\/)(calendars|gmail)\.local\.json$|\.ics$|\.ical\.zip$/i;
+// A synthetic calendar committed as a parser test fixture is allowed. The
+// content scan below still checks it for secret addresses.
+const FIXTURE_ICS = /^test\/fixtures\/.+\.ics$/i;
 
 // Credential-equivalent values, wherever they appear. Messages never echo the
 // match, because CI logs on a public repo are public too.
@@ -110,13 +128,19 @@ const SECRETS = [
 
 const secretProblems = [];
 for (const f of files) {
-  if (PRIVATE_FILE.test(f)) {
+  if (PRIVATE_FILE.test(f) && !FIXTURE_ICS.test(f)) {
     secretProblems.push({ file: f, message: 'credential or personal file is in the repo; remove it with git rm --cached' });
     continue;
   }
   const buf = fs.readFileSync(path.join(root, f));
-  if (buf.subarray(0, 8000).includes(0)) continue; // binary, by git's own heuristic
-  buf.toString('utf8').split('\n').forEach((text, i) => {
+  // UTF-16 text is full of NULs, so check for its BOM before the binary test.
+  // Notepad's "Unicode" encoding and Windows PowerShell 5.1's `>` write it.
+  let content;
+  if (buf[0] === 0xff && buf[1] === 0xfe) content = buf.toString('utf16le');
+  else if (buf[0] === 0xfe && buf[1] === 0xff) content = Buffer.from(buf.subarray(0, buf.length & ~1)).swap16().toString('utf16le');
+  else if (buf.subarray(0, 8000).includes(0)) continue; // binary, by git's own heuristic
+  else content = buf.toString('utf8');
+  content.split('\n').forEach((text, i) => {
     for (const [name, re] of SECRETS) {
       if (re.test(text)) secretProblems.push({ file: f, line: i + 1, message: name + ' (value not printed)' });
     }
