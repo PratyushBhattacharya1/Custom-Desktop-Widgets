@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Supersede stale runs on a PR. On main, each commit gets its own group: a
+  # group cancels its pending run when a newer one queues, even with
+  # cancel-in-progress off, so a shared group would skip commits.
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # The job id is the name of a required status check in
+  # .github/rulesets/main.json. Rename one without the other and every PR
+  # waits for a check that never reports.
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        with:
+          # The Node that the locked electron (31.7.7) embeds. Pin it exactly:
+          # Node 20.19+ enables require(esm), so a newer 20.x would load
+          # modules that Electron can't. Move this with the electron version;
+          # ELECTRON_RUN_AS_NODE=1 npx electron -p process.versions.node
+          node-version: 20.18.0
+
+      - name: Syntax, JSON and secret checks
+        run: node scripts/check.js
+
+      - name: Load the ICS parser
+        # The regression suite needs the personal Google export, which is never
+        # committed. Without it, verify-ics.js still requires every parser
+        # module and then exits 0, so this step catches a module that fails to
+        # load, and nothing more.
+        run: node scripts/verify-ics.js

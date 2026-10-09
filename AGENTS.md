@@ -11,14 +11,36 @@ Frameless desktop widgets for Windows: a clock, a calendar fed by live read-only
 ```bash
 npm install
 npm start                                     # electron . — opens every widget plus the tray icon
+node scripts/check.js                         # the static checks CI runs: syntax, JSON, secrets
 node scripts/verify-ics.js [export.zip|.ics]  # ICS parser regression suite (plain Node, no Electron)
 node --check path/to/file.js                  # syntax check
 ```
 
-- There is no linter, formatter, test framework or `npm test`. `scripts/verify-ics.js` is the only committed test. Run it after any change under `src/main/ics/`.
+- There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js` is the only committed test. Run it after any change under `src/main/ics/`.
 - With no argument, `verify-ics.js` uses the first `*.ical.zip` in the repo root, which is a gitignored personal Google Calendar export. If it finds no fixture it prints a notice and exits 0, so a pass without a fixture proves nothing. Its thresholds are tuned to that export (more than 400 events, instances in April 2024, a March 2024 DST check), so a different export can fail because of the data rather than the code.
 - `npm start` has no dev profile. It reads the real `calendars.local.json` and `gmail.local.json`, polls the real Gmail account, and writes the real saved state in `userData`.
 - The renderers expose `window.__cal`, `window.__mail` and `window.__settings` for an external verification harness that is not in the repo. Keep these hooks when refactoring.
+
+## Workflow
+
+Every change starts as a GitHub issue and lands through a pull request. A repository ruleset on `main` rejects direct pushes, force pushes and deletion. A PR can merge only when its required checks pass and its review threads are resolved. The ruleset has no bypass list, so it binds the repo owner too.
+
+1. Open an issue with `gh issue create`. Issues are public, so keep feed URLs, OAuth secrets, tokens and email contents out of them.
+2. Branch from an up-to-date `main` as `<issue>-<short-slug>`. `gh issue develop <issue> --checkout` creates the branch and links it to the issue.
+3. Before pushing, run `node scripts/check.js`, and `node scripts/verify-ics.js` if you changed `src/main/ics/`.
+4. Open the PR against `main` with `Closes #<issue>` in the description. The PR template starts with that line, so fill in the number.
+5. Merge once the checks pass. GitHub closes the issue and deletes the branch.
+
+The required checks both run on GitHub Actions:
+
+- `checks` (`.github/workflows/ci.yml`) runs `scripts/check.js` and loads the ICS parser. CI has no calendar export, so the ICS regression suite runs only locally.
+- `linked-issue` (`.github/workflows/linked-issue.yml`) fails unless the PR closes an open issue in this repo. Editing the description re-runs it. Linking the issue from the Development sidebar doesn't, so re-run the job by hand after that.
+
+A check's name is its job id. If you rename a job, the ruleset keeps waiting for a check that never reports, and every PR is blocked. Change the job id, `.github/rulesets/main.json` and the live ruleset together.
+
+`.github/rulesets/main.json` is a hand-kept snapshot of the live ruleset, not its source. GitHub never reads the file and nothing compares the two, and the live ruleset also carries server defaults the file leaves out. The live ruleset is what's enforced. When you change it, update the file in the same PR; `gh api repos/{owner}/{repo}/rulesets` shows the live version.
+
+ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. Neither is a required check, so their findings are advisory.
 
 ## Architecture
 
@@ -108,7 +130,9 @@ Rules:
   - `*.ical.zip` and `*.ics`: personal calendar exports.
 - The committed templates are `calendars.example.json` and `gmail.example.json`.
 - A feed URL must never reach a log line, a renderer or a filename. Error messages from `net` include the URL, so pass every message through `feed.redact()` or `auth.redact()` (which also masks long tokens). Cache files are named from the validated config `id`, never from the URL.
-- GitHub Pages publishes `docs/` from `main`, so a push to `main` makes docs changes live. The site includes the privacy policy (`docs/privacy.md`) used for Google OAuth publishing. Update it when scopes or stored data change.
+- Secret scanning and push protection are on, so GitHub rejects a push that contains a known token format. Don't bypass the rejection. Remove the secret from the branch's commits instead; it never reached GitHub, so there is nothing to rotate.
+- CI's `checks` job fails when a gitignored credential file is committed anyway, or when a file contains a secret calendar address or a Google OAuth secret or token. The check runs after the push, so on this public repo a hit means the value is already exposed. Rotate it by resetting the calendar's secret address or the OAuth client secret. Deleting the commit doesn't revoke it.
+- GitHub Pages publishes `docs/` from `main`, so merging a PR that touches `docs/` makes the change live. The site includes the privacy policy (`docs/privacy.md`) used for Google OAuth publishing. Update it when scopes or stored data change.
 
 ## Conventions
 
