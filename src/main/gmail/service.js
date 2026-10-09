@@ -9,8 +9,8 @@ const path = require('path');
 const fs = require('fs');
 const config = require('./config');
 const auth = require('./auth');
+const { isMessageId, listUrl, detailUrl } = require('./urls');
 
-const API = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CACHE_PATH = path.join(app.getPath('userData'), 'gmail-cache.json');
 
 const state = {
@@ -137,20 +137,14 @@ async function fetchMessages() {
 
   const token = await auth.getAccessToken();
 
-  const listUrl = API + '/messages?maxResults=' + cfg.maxMessages +
-    '&q=' + encodeURIComponent(cfg.query);
-  const list = await apiGet(listUrl, token);
-  const ids = (list.messages || []).map((m) => m.id);
-
-  // metadata format carries the snippet and labelIds without the body, which is
-  // all the widget shows and keeps each response small.
-  // The id comes out of an API response, so it is encoded as a single path
-  // segment: a "/", "?" or "#" in it can't extend the path or start a query.
-  const detailUrl = (id) => API + '/messages/' + encodeURIComponent(id) +
-    '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date';
+  const list = await apiGet(listUrl(cfg), token);
+  const listed = (list.messages || []).map((m) => m.id);
+  // An id that isn't a Gmail id is never requested; it counts as a message
+  // that could not be loaded, so the run is partial rather than complete.
+  const ids = listed.filter(isMessageId);
 
   const messages = [];
-  let failed = 0;
+  let failed = listed.length - ids.length;
   // Modest concurrency: enough to stay quick, far short of any rate limit.
   const CHUNK = 5;
   for (let i = 0; i < ids.length; i += CHUNK) {
@@ -163,8 +157,11 @@ async function fetchMessages() {
         return null;
       }))
     );
-    batch.forEach((m) => {
+    batch.forEach((m, j) => {
       if (!m) return;
+      // A reply that isn't the message asked for (another endpoint's body, say)
+      // is a failed load, not a blank row in a run that claims to be complete.
+      if (m.id !== ids[i + j]) { failed += 1; return; }
       const labels = m.labelIds || [];
       messages.push({
         id: m.id,
@@ -182,7 +179,7 @@ async function fetchMessages() {
   // Every detail request failing while the list call succeeded means something
   // is broadly wrong. Keep the cache rather than replacing a full inbox with an
   // empty one that claims to be current.
-  if (ids.length && !messages.length) {
+  if (listed.length && !messages.length) {
     throw new Error('Gmail returned no readable messages');
   }
 
@@ -195,7 +192,7 @@ async function fetchMessages() {
     // Partial results are worth showing, but they are not a fresh snapshot:
     // leave the timestamp and the cache alone so the dot stays up.
     state.stale = true;
-    state.error = failed + ' of ' + ids.length + ' messages could not be loaded';
+    state.error = failed + ' of ' + listed.length + ' messages could not be loaded';
     return false;
   }
 

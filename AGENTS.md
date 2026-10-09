@@ -13,10 +13,11 @@ npm install
 npm start                                     # electron . — opens every widget plus the tray icon
 node scripts/check.js                         # the static checks CI runs: syntax, JSON, secrets
 node scripts/verify-ics.js [export.zip|.ics]  # ICS parser regression suite (plain Node, no Electron)
+node scripts/verify-gmail.js                  # Gmail message-id and request-URL checks (plain Node)
 node --check path/to/file.js                  # syntax check
 ```
 
-- There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js` is the only committed test. Run it after any change under `src/main/ics/`.
+- There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js` and `scripts/verify-gmail.js` are the only committed tests. Run `verify-ics.js` after any change under `src/main/ics/`, and `verify-gmail.js` after any change under `src/main/gmail/`.
 - With no argument, `verify-ics.js` uses the first `*.ical.zip` in the repo root, which is a gitignored personal Google Calendar export. If it finds no fixture it prints a notice and exits 0, so a pass without a fixture proves nothing. Its thresholds are tuned to that export (more than 400 events, instances in April 2024, a March 2024 DST check), so a different export can fail because of the data rather than the code.
 - `npm start` has no dev profile. It reads the real `calendars.local.json` and `gmail.local.json`, polls the real Gmail account, and writes the real saved state in `userData`.
 - The renderers expose `window.__cal`, `window.__mail` and `window.__settings` for an external verification harness that is not in the repo. Keep these hooks when refactoring.
@@ -27,13 +28,13 @@ Every change starts as a GitHub issue and lands through a pull request. A reposi
 
 1. Open an issue with `gh issue create`. Issues are public, so keep feed URLs, OAuth secrets, tokens and email contents out of them.
 2. Branch from an up-to-date `main` as `<issue>-<short-slug>`. `gh issue develop <issue> --checkout` creates the branch and links it to the issue.
-3. Before pushing, run `node scripts/check.js`, and `node scripts/verify-ics.js` if you changed `src/main/ics/`.
+3. Before pushing, run `node scripts/check.js`, `node scripts/verify-ics.js` if you changed `src/main/ics/`, and `node scripts/verify-gmail.js` if you changed `src/main/gmail/`.
 4. Open the PR against `main` with `Closes #<issue>` in the description. The PR template starts with that line, so fill in the number.
 5. Merge once the checks pass. GitHub closes the issue and deletes the branch.
 
 The required checks both run on GitHub Actions:
 
-- `checks` (`.github/workflows/ci.yml`) runs `scripts/check.js` and loads the ICS parser. CI has no calendar export, so the ICS regression suite runs only locally.
+- `checks` (`.github/workflows/ci.yml`) runs `scripts/check.js`, loads the ICS parser and runs `scripts/verify-gmail.js`. CI has no calendar export, so the ICS regression suite runs only locally.
 - `linked-issue` (`.github/workflows/linked-issue.yml`) fails unless the PR closes an open issue in this repo. Editing the description re-runs it. Linking the issue from the Development sidebar doesn't, so re-run the job by hand after that.
 
 A check's name is its job id. If you rename a job, the ruleset keeps waiting for a check that never reports, and every PR is blocked. Change the job id, `.github/rulesets/main.json` and the live ruleset together.
@@ -103,6 +104,7 @@ Rules:
 - The OAuth app is in Google's Testing status, so refresh tokens expire every 7 days. "Needs reconnect" is therefore a normal state. The widget shows it, and the email widget's context menu offers Connect/Reconnect Gmail… and Refresh now.
 - Only `invalid_grant` from the token endpoint means the credential is dead. A 401 or 403 from the Gmail API must not delete the refresh token, because rate limits also arrive as 403.
 - Only a complete fetch may overwrite the cache or the last-success timestamp.
+- Message ids come out of an API response. `urls.js` builds every request URL, and an id goes into one only after `isMessageId()` accepts it.
 - Only rendered message fields cross IPC, never tokens or the client secret.
 
 ### Renderers (`widgets/`)
