@@ -144,7 +144,9 @@ async function fetchMessages() {
 
   // metadata format carries the snippet and labelIds without the body, which is
   // all the widget shows and keeps each response small.
-  const detailUrl = (id) => API + '/messages/' + id +
+  // The id comes out of an API response, so it is encoded as a single path
+  // segment: a "/", "?" or "#" in it can't extend the path or start a query.
+  const detailUrl = (id) => API + '/messages/' + encodeURIComponent(id) +
     '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date';
 
   const messages = [];
