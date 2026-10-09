@@ -23,7 +23,7 @@ node --check path/to/file.js                  # syntax check
 
 ## Workflow
 
-Every change starts as a GitHub issue and lands through a pull request. A repository ruleset on `main`, kept in `.github/rulesets/main.json`, rejects direct pushes, force pushes and deletion. A PR can merge only when its required checks pass and its review threads are resolved. The ruleset has no bypass list, so it binds the repo owner too.
+Every change starts as a GitHub issue and lands through a pull request. A repository ruleset on `main` rejects direct pushes, force pushes and deletion. A PR can merge only when its required checks pass and its review threads are resolved. The ruleset has no bypass list, so it binds the repo owner too.
 
 1. Open an issue with `gh issue create`. Issues are public, so keep feed URLs, OAuth secrets, tokens and email contents out of them.
 2. Branch from an up-to-date `main` as `<issue>-<short-slug>`. `gh issue develop <issue> --checkout` creates the branch and links it to the issue.
@@ -34,9 +34,11 @@ Every change starts as a GitHub issue and lands through a pull request. A reposi
 The required checks both run on GitHub Actions:
 
 - `checks` (`.github/workflows/ci.yml`) runs `scripts/check.js` and loads the ICS parser. CI has no calendar export, so the ICS regression suite runs only locally.
-- `linked-issue` (`.github/workflows/linked-issue.yml`) fails unless the PR closes an issue. Editing the description re-runs it.
+- `linked-issue` (`.github/workflows/linked-issue.yml`) fails unless the PR closes an open issue in this repo. Editing the description re-runs it. Linking the issue from the Development sidebar doesn't, so re-run the job by hand after that.
 
 A check's name is its job id. If you rename a job, the ruleset keeps waiting for a check that never reports, and every PR is blocked. Change the job id, `.github/rulesets/main.json` and the live ruleset together.
+
+`.github/rulesets/main.json` is a hand-kept snapshot of the live ruleset, not its source. GitHub never reads the file and nothing compares the two, and the live ruleset also carries server defaults the file leaves out. The live ruleset is what's enforced. When you change it, update the file in the same PR; `gh api repos/{owner}/{repo}/rulesets` shows the live version.
 
 ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. Neither is a required check, so their findings are advisory.
 
