@@ -38,7 +38,7 @@ The required checks both run on GitHub Actions:
 
 A check's name is its job id. If you rename a job, the ruleset keeps waiting for a check that never reports, and every PR is blocked. Change the job id, `.github/rulesets/main.json` and the live ruleset together.
 
-ECC Tools audits each PR. Its findings are advisory, because none of its checks are required.
+ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. Neither is a required check, so their findings are advisory.
 
 ## Architecture
 
@@ -128,6 +128,7 @@ Rules:
   - `*.ical.zip` and `*.ics`: personal calendar exports.
 - The committed templates are `calendars.example.json` and `gmail.example.json`.
 - A feed URL must never reach a log line, a renderer or a filename. Error messages from `net` include the URL, so pass every message through `feed.redact()` or `auth.redact()` (which also masks long tokens). Cache files are named from the validated config `id`, never from the URL.
+- Secret scanning and push protection are on, so GitHub rejects a push that contains a known token format. Don't bypass the rejection. Remove the secret from the branch's commits instead; it never reached GitHub, so there is nothing to rotate.
 - CI's `checks` job fails when a gitignored credential file is committed anyway, or when a file contains a secret calendar address or a Google OAuth secret or token. The check runs after the push, so on this public repo a hit means the value is already exposed. Rotate it by resetting the calendar's secret address or the OAuth client secret. Deleting the commit doesn't revoke it.
 - GitHub Pages publishes `docs/` from `main`, so merging a PR that touches `docs/` makes the change live. The site includes the privacy policy (`docs/privacy.md`) used for Google OAuth publishing. Update it when scopes or stored data change.
 
