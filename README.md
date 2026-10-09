@@ -9,9 +9,9 @@ npm install
 npm start
 ```
 
-Three widgets appear on screen. Drag a widget by its background to move it — the position is saved automatically and restored next launch.
+Three widgets appear on screen. Drag a widget by its background to move it — the position is saved automatically and restored next launch. A widget remembers its distance from the nearest screen edges rather than a fixed coordinate. A widget in the top-right corner stays there when the display scale or resolution changes, and a widget dropped partly off-screen is pulled back on. A widget whose monitor is unplugged moves to the main display and goes back when the monitor returns.
 
-A tray icon (bottom-right of the taskbar) lets you show/hide individual widgets, show/hide all, and quit.
+A tray icon (bottom-right of the taskbar) lets you show/hide individual widgets, show/hide all, reset every widget to its default position, and quit.
 
 ## Pinning a widget in place
 
@@ -63,6 +63,7 @@ Feeds refresh every 60 minutes (configurable via `refreshMinutes`), on wake from
 main.js                     app lifecycle, windows, tray
 preload.js                  contextBridge API for the renderers
 src/main/store.js           per-widget position + pinned state
+src/main/placement.js       screen-edge anchors that keep widgets on a display
 src/main/ipc.js             all ipcMain handlers, incl. self-resize
 src/main/calendar/          config, feed fetching/caching, month expansion
 src/main/ics/               zero-dependency iCalendar parser + recurrence

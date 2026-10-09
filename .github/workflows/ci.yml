@@ -47,3 +47,6 @@ jobs:
 
       - name: Gmail URL checks
         run: node scripts/verify-gmail.js
+
+      - name: Placement checks
+        run: node scripts/verify-placement.js

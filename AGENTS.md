@@ -14,10 +14,11 @@ npm start                                     # electron . — opens every widge
 node scripts/check.js                         # the static checks CI runs: syntax, JSON, secrets
 node scripts/verify-ics.js [export.zip|.ics]  # ICS parser regression suite (plain Node, no Electron)
 node scripts/verify-gmail.js                  # Gmail message-id and request-URL checks (plain Node)
+node scripts/verify-placement.js              # widget placement and screen-edge anchor checks (plain Node)
 node --check path/to/file.js                  # syntax check
 ```
 
-- There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js` and `scripts/verify-gmail.js` are the only committed tests. Run `verify-ics.js` after any change under `src/main/ics/`, and `verify-gmail.js` after any change under `src/main/gmail/`.
+- There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js`, `scripts/verify-gmail.js` and `scripts/verify-placement.js` are the only committed tests. Run `verify-ics.js` after any change under `src/main/ics/`, `verify-gmail.js` after any change under `src/main/gmail/`, and `verify-placement.js` after any change to `src/main/placement.js`.
 - With no argument, `verify-ics.js` uses the first `*.ical.zip` in the repo root, which is a gitignored personal Google Calendar export. If it finds no fixture it prints a notice and exits 0, so a pass without a fixture proves nothing. Its thresholds are tuned to that export (more than 400 events, instances in April 2024, a March 2024 DST check), so a different export can fail because of the data rather than the code.
 - `npm start` has no dev profile. It reads the real `calendars.local.json` and `gmail.local.json`, polls the real Gmail account, and writes the real saved state in `userData`.
 - The renderers expose `window.__cal`, `window.__mail` and `window.__settings` for an external verification harness that is not in the repo. Keep these hooks when refactoring.
@@ -28,13 +29,13 @@ Every change starts as a GitHub issue and lands through a pull request. A reposi
 
 1. Open an issue with `gh issue create`. Issues are public, so keep feed URLs, OAuth secrets, tokens and email contents out of them.
 2. Branch from an up-to-date `main` as `<issue>-<short-slug>`. `gh issue develop <issue> --checkout` creates the branch and links it to the issue.
-3. Before pushing, run `node scripts/check.js`, `node scripts/verify-ics.js` if you changed `src/main/ics/`, and `node scripts/verify-gmail.js` if you changed `src/main/gmail/`.
+3. Before pushing, run `node scripts/check.js`, `node scripts/verify-ics.js` if you changed `src/main/ics/`, `node scripts/verify-gmail.js` if you changed `src/main/gmail/`, and `node scripts/verify-placement.js` if you changed `src/main/placement.js`.
 4. Open the PR against `main` with `Closes #<issue>` in the description. The PR template starts with that line, so fill in the number.
 5. Merge once the checks pass. GitHub closes the issue and deletes the branch.
 
 The required checks both run on GitHub Actions:
 
-- `checks` (`.github/workflows/ci.yml`) runs `scripts/check.js`, loads the ICS parser and runs `scripts/verify-gmail.js`. CI has no calendar export, so the ICS regression suite runs only locally.
+- `checks` (`.github/workflows/ci.yml`) runs `scripts/check.js`, loads the ICS parser, and runs `scripts/verify-gmail.js` and `scripts/verify-placement.js`. CI has no calendar export, so the ICS regression suite runs only locally.
 - `linked-issue` (`.github/workflows/linked-issue.yml`) fails unless the PR closes an open issue in this repo. Editing the description re-runs it. Linking the issue from the Development sidebar doesn't, so re-run the job by hand after that.
 
 A check's name is its job id. If you rename a job, the ruleset keeps waiting for a check that never reports, and every PR is blocked. Change the job id, `.github/rulesets/main.json` and the live ruleset together.
@@ -55,7 +56,7 @@ ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. 
 
 ### Persisted state and appearance settings
 
-- `src/main/store.js` owns the only state file, `widget-positions.json` in Electron `userData` (`%APPDATA%\desktop-widgets\`). The file name is historical, and renaming it would lose saved positions. Its shape is `{ [widgetId]: { x, y, w, h, pinned, settings } }`. Writes are debounced by 250 ms and flushed on `before-quit`. `patch()` merges only one level deep, so always write the whole `settings` object through `settings.setSetting()`.
+- `src/main/store.js` owns the only state file, `widget-positions.json` in Electron `userData` (`%APPDATA%\desktop-widgets\`). The file name is historical, and renaming it would lose saved positions. Its shape is `{ [widgetId]: { anchor, w, h, pinned, settings } }`; see Placement for `anchor`. `w` and `h` exist only for an axis the widget measures. Writes are debounced by 250 ms and flushed on `before-quit`. `patch()` merges only one level deep, so always write the whole `settings` object through `settings.setSetting()`.
 - `src/main/settings.js` holds three things: the catalogue of allowed values (backgrounds, opacity steps, sizes), a reader that sanitises stored values, and `composeFor(id)`, which turns the settings into CSS values. After every change, main pushes the composed payload (`ipc.pushSettings`). `widgets/shared/settings.js` applies it as CSS custom properties on `<html>`. `CAPABILITIES` decides which menu items each widget gets; only the clock offers Size. The module is separate from `main.js` to avoid a require cycle.
 - Background presets are dark-only on purpose. The calendar's chrome is hard-coded white-on-dark.
 
@@ -64,9 +65,18 @@ ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. 
 - `src/main/menu.js` needs two triggers. Windows delivers a right-click on a `-webkit-app-region: drag` area as a non-client message that Chromium never sees, so only the window's `system-context-menu` event fires there. Right-clicks on `no-drag` areas go through the `webContents` `context-menu` event, and so do all right-clicks on a pinned widget, because `html.pos-locked` makes the whole body `no-drag`. `popup()` ignores a second popup within 300 ms and opens at the cursor.
 - Keep widget windows activatable. `focusable: false` (the `WS_EX_NOACTIVATE` window style) was tried to stop Windows bringing widgets to the front whenever it picks a new foreground window. It broke the context menu: the menu no longer closed on an outside click, and forcing `focus()` made taskbar buttons flash. The surfacing problem is still unsolved. Any fix must leave window activation alone.
 
+### Placement
+
+- A saved position is an anchor, not a coordinate: the widget's distance from the nearer horizontal and the nearer vertical edge of its display's work area, e.g. `{ display: 1879209626, right: 8, top: 15 }`. Absolute coordinates broke on a laptop that Windows runs at 100% on one GPU and 125% on the other: the desktop is 1920 DIP wide in one session and 1536 in the next, so a corner spot saved at one scale was off-screen at the other. An anchor keeps a corner widget in its corner at any scale. The cost: a widget near the middle anchors to whichever edge is closer, so it shifts when the screen width changes.
+- `src/main/placement.js` holds the geometry and has no Electron dependency, so `scripts/verify-placement.js` tests it in plain Node. The helpers that read and write the store live in `src/main/ipc.js`: `initialBounds`, `place`, `rememberPosition` and `resetPosition`.
+- Every placement fits the window fully inside a work area, with `EDGE_MARGIN` (8 px) clear on the right and bottom, the same gap `applySize()` leaves. Placement happens when a window is created, on `display-metrics-changed`/`-added`/`-removed` (and once more 500 ms later, because Windows' own per-window DPI resize can arrive after the event), before tray Show and Show All, and on tray Reset Positions. Pinned widgets are placed too, because `setMovable(false)` blocks only user drags, not `setBounds()`.
+- Placement never reads a position back from the window. At 125% most DIP values fall between whole pixels, so `getBounds()` can come back a DIP off (y 15 as 14), and re-applying what it returns makes the error accumulate. Positions and sizes are always computed from saved values, and windows are compared within `DRIFT` (2 DIP).
+- Only the end of a user drag rewrites an anchor (`'moved'`, which `setBounds()` never fires). A drop partly off-screen is pulled back on. When an anchor's display is unplugged, the widget falls back to the primary display, and the anchor keeps the original display id so the widget goes back when that display returns.
+- A state entry with no `anchor` comes from an older build. `initialBounds()` converts its absolute `x`/`y` once and drops its `w`/`h`, because that build also saved a width the calendar never measured.
+
 ### Self-sizing
 
-- Widgets size their own windows. `widgets/shared/autosize.js` watches `.card` with a `ResizeObserver` and sends `widget:request-size`. `ipc.applySize()` caps the request at 45% of the display work area's height and 35% of its width, and at the room left below and to the right of the window. It then saves `w`/`h`, so the next launch opens at the fitted size.
+- Widgets size their own windows. `widgets/shared/autosize.js` watches `.card` with a `ResizeObserver` and sends `widget:request-size`. `ipc.applySize()` caps the request at 45% of the display work area's height and 35% of its width, and at the room on the widget's far side from its anchored edges. A widget grows away from those edges, downward from a top anchor and upward from a bottom one. `applySize()` saves only the axes the renderer asked for, so the next launch opens at the fitted size. An axis the renderer doesn't measure stays at its registry size.
 - Three guards prevent resize loops: the renderer ignores changes of 1 px or less, main skips requests that change nothing, and main accepts at most 10 requests per second. Keep all three. `MIN_SIZE` and `MIN_CAP` reproduce the earlier clamping exactly; don't "tidy" them.
 - The clock reports both width and height, and `width: max-content` on its card is required for it to shrink. The calendar reports height only, because its 320 px width is tuned to the grid. The email widget has a fixed size.
 
@@ -121,7 +131,7 @@ Rules:
 ### Adding a widget
 
 1. Create `widgets/<id>/index.html` with a `<div class="card">`, linking `../shared/widget.css` and the shared scripts in the order above.
-2. Add `{ id, file, width, height, defaultX, defaultY }` to `WIDGETS` in `main.js`.
+2. Add `{ id, file, width, height, defaultX, defaultY }` to `WIDGETS` in `main.js`. `defaultX`/`defaultY` are distances from the left and top of the primary display's work area.
 3. Add a `CAPABILITIES` entry in `src/main/settings.js`. Without one, the widget gets no Size option.
 
 ## Secrets and local data

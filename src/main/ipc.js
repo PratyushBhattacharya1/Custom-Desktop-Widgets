@@ -5,8 +5,13 @@
 const { ipcMain, BrowserWindow, screen } = require('electron');
 const store = require('./store');
 const settings = require('./settings');
+const placement = require('./placement');
 const calendarService = require('./calendar/service');
 const gmailService = require('./gmail/service');
+
+// main.js's WIDGETS registry by id, for default sizes and positions. Handed in
+// through register() because main.js requires this module, not the reverse.
+let registry = {};
 
 function windowFor(event) {
   return BrowserWindow.fromWebContents(event.sender);
@@ -23,9 +28,7 @@ const MAX_WIDTH_FRACTION = 0.35;
 const MIN_SIZE = { w: 120, h: 80 };
 const MIN_CAP = { w: 160, h: 120 };
 
-function workAreaFor(win) {
-  const [x, y] = win.getPosition();
-  const display = screen.getDisplayNearestPoint({ x, y });
+function budgetFor(display) {
   return {
     width: display.workArea.width,
     height: display.workArea.height,
@@ -34,7 +37,14 @@ function workAreaFor(win) {
   };
 }
 
-function register() {
+function workAreaFor(win) {
+  const [x, y] = win.getPosition();
+  return budgetFor(screen.getDisplayNearestPoint({ x, y }));
+}
+
+function register(widgets) {
+  registry = Object.fromEntries(widgets.map((w) => [w.id, w]));
+
   ipcMain.handle('widget:get-pinned', (event) => {
     const win = windowFor(event);
     if (!win) return false;
@@ -107,10 +117,105 @@ function pushSettings(win) {
   win.webContents.send('widget:settings-changed', settings.composeFor(win.__widgetId));
 }
 
+// --- placement: a saved position is an anchor to screen edges (see placement.js) ---
+
+function displays() {
+  return screen.getAllDisplays();
+}
+
+function primaryId() {
+  return screen.getPrimaryDisplay().id;
+}
+
+// The registry position, as an anchor on the primary display.
+function defaultAnchor(id) {
+  const widget = registry[id];
+  return { display: primaryId(), left: widget.defaultX, top: widget.defaultY };
+}
+
+function anchorFor(id) {
+  const saved = store.get(id).anchor;
+  return placement.isAnchor(saved) ? saved : defaultAnchor(id);
+}
+
+// An axis the widget fits to its content comes from the store. Any other axis
+// stays at the registry size and is never read back off the window. At 125% a
+// setBounds/getBounds round trip can be off by a DIP, and re-applying the
+// read-back width on every height request walked the calendar from 320 to 324
+// in a replay, with x and y creeping as well.
+function sizeFor(id) {
+  const saved = store.get(id);
+  const widget = registry[id];
+  return {
+    width: Number.isFinite(saved.w) ? saved.w : widget.width,
+    height: Number.isFinite(saved.h) ? saved.h : widget.height,
+  };
+}
+
+function boundsFor(id) {
+  return placement.fromAnchor(anchorFor(id), sizeFor(id), displays(), primaryId());
+}
+
+// Bounds for a widget about to be created.
+//
+// An entry with no anchor was written by an older build. Its x/y are absolute
+// coordinates, so they become an anchor. Its w/h are dropped: that build saved
+// whatever width the window had even for a widget that never measured one,
+// which left the calendar reopening at 274 px around its 320 px card. Widgets
+// that do measure themselves refit within a frame, around their anchor.
+function initialBounds(id) {
+  const saved = store.get(id);
+  if (!placement.isAnchor(saved.anchor)) {
+    const widget = registry[id];
+    const anchor = Number.isFinite(saved.x) && Number.isFinite(saved.y)
+      ? placement.anchorFromRect({
+        x: saved.x,
+        y: saved.y,
+        width: Number.isFinite(saved.w) ? saved.w : widget.width,
+        height: Number.isFinite(saved.h) ? saved.h : widget.height,
+      }, displays())
+      : defaultAnchor(id);
+    // Undefined drops a key when the store serialises.
+    store.patch(id, { anchor, x: undefined, y: undefined, w: undefined, h: undefined });
+  }
+  return boundsFor(id);
+}
+
+// Puts a window where its anchor says. Skips the setBounds when it's already
+// there, because display events fire often (a taskbar auto-hiding is one).
+function place(win) {
+  if (!win || win.isDestroyed()) return;
+  const target = boundsFor(win.__widgetId);
+  if (!placement.closeTo(win.getBounds(), target)) win.setBounds(target);
+}
+
+// A drag the user just finished. Re-anchors the widget where it was dropped and
+// pulls it fully onto that display. 'moved' also fires when a click on the drag
+// strip ends without moving anything; re-anchoring then would move a widget
+// that's on the primary only while its own monitor is unplugged, so a window
+// still where its anchor puts it is left alone. (setBounds never fires 'moved'.)
+function rememberPosition(win) {
+  if (!win || win.isDestroyed()) return;
+  const id = win.__widgetId;
+  const [x, y] = win.getPosition();
+  const dropped = { x, y, ...sizeFor(id) };
+  if (placement.closeTo(dropped, boundsFor(id))) return;
+  store.patch(id, { anchor: placement.anchorFromRect(dropped, displays()) });
+  place(win);
+}
+
+// Back to the registry position. Pin state stays: once the widget is on screen,
+// its context menu can unlock it.
+function resetPosition(win) {
+  if (!win || win.isDestroyed()) return;
+  store.patch(win.__widgetId, { anchor: defaultAnchor(win.__widgetId) });
+  place(win);
+}
+
 // --- size application, with the three anti-oscillation guards ---
 //
-// A missing axis means "leave it alone", which is what lets the calendar keep
-// sending height only and stay byte-identical.
+// A missing axis stays at its registry size (see sizeFor), which is what lets
+// the calendar send height only and keep its 320 px width.
 const sizeState = new WeakMap(); // win -> { last: {w, h}, times: [], warned }
 
 function applySize(win, requested) {
@@ -134,36 +239,56 @@ function applySize(win, requested) {
   }
   state.times.push(now);
 
-  const bounds = win.getBounds();
-  const budget = workAreaFor(win);
-  const display = screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y });
+  // Everything below starts from the saved anchor and size, never from
+  // getBounds(), so Windows' rounding can't accumulate across requests.
+  const id = win.__widgetId;
+  const all = displays();
+  const anchor = anchorFor(id);
+  const area = placement.anchorDisplay(anchor, all, primaryId()).workArea;
+  const budget = budgetFor({ workArea: area });
+  const size = sizeFor(id);
+  const at = placement.fromAnchor(anchor, size, all, primaryId());
 
-  // Never let a widget run off the bottom or the right: the calendar's own
-  // scrollbar absorbs whatever doesn't fit.
-  const roomBelow = display.workArea.y + budget.height - bounds.y - 8;
-  const roomRight = display.workArea.x + budget.width - bounds.x - 8;
-  const capH = Math.max(MIN_CAP.h, Math.min(budget.maxWidgetHeight, roomBelow));
-  const capW = Math.max(MIN_CAP.w, Math.min(budget.maxWidgetWidth, roomRight));
+  // Never let a widget run off the screen: the calendar's own scrollbar absorbs
+  // whatever doesn't fit. A widget grows away from its anchored edges, so its
+  // room is on the far side: below one anchored to the top, above one anchored
+  // to the bottom, and likewise across.
+  const margin = placement.EDGE_MARGIN;
+  const roomY = Number.isFinite(anchor.top)
+    ? area.y + area.height - at.y - margin
+    : at.y + at.height - area.y;
+  const roomX = Number.isFinite(anchor.left)
+    ? area.x + area.width - at.x - margin
+    : at.x + at.width - area.x;
+  const capH = Math.max(MIN_CAP.h, Math.min(budget.maxWidgetHeight, roomY));
+  const capW = Math.max(MIN_CAP.w, Math.min(budget.maxWidgetWidth, roomX));
 
-  const targetH = wantH === null ? bounds.height : Math.max(MIN_SIZE.h, Math.min(wantH, capH));
-  const targetW = wantW === null ? bounds.width : Math.max(MIN_SIZE.w, Math.min(wantW, capW));
+  const targetH = wantH === null ? size.height : Math.max(MIN_SIZE.h, Math.min(wantH, capH));
+  const targetW = wantW === null ? size.width : Math.max(MIN_SIZE.w, Math.min(wantW, capW));
+  const target = placement.fromAnchor(anchor, { width: targetW, height: targetH }, all, primaryId());
 
-  // Guard 2: main-side no-op when nothing would change.
+  // Guard 2: main-side no-op when nothing would change. The window is compared
+  // within rounding, or a DIP that can never be reached would defeat the guard.
   if (state.last.w === targetW && state.last.h === targetH &&
-      bounds.width === targetW && bounds.height === targetH) return;
+      placement.closeTo(win.getBounds(), target)) return;
   state.last = { w: targetW, h: targetH };
 
   win.setMinimumSize(1, 1);
   win.setMaximumSize(10000, 10000);
-  win.setBounds({ x: bounds.x, y: bounds.y, width: targetW, height: targetH });
+  win.setBounds(target);
 
-  // Remember it so the next launch opens at the fitted size instead of the
-  // registry default and then visibly snapping once the renderer measures.
-  store.patch(win.__widgetId, { w: targetW, h: targetH });
+  // Remember what the renderer measured, so the next launch opens at the fitted
+  // size instead of the registry default and then visibly snapping. Only those
+  // axes: saving the calendar's unmeasured width is what kept it at 274 px.
+  const fitted = {};
+  if (wantW !== null) fitted.w = targetW;
+  if (wantH !== null) fitted.h = targetH;
+  store.patch(id, fitted);
 }
 
 module.exports = {
   register, workAreaFor, applySize,
   MAX_HEIGHT_FRACTION, MAX_WIDTH_FRACTION, MIN_SIZE, MIN_CAP,
   setPinned, pushSettings,
+  initialBounds, place, rememberPosition, resetPosition,
 };
