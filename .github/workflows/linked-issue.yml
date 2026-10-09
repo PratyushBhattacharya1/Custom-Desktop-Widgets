@@ -27,17 +27,34 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
         run: |
           # closingIssuesReferences is GitHub's own parse of the description,
-          # plus any issue linked by hand in the Development sidebar. It can
-          # trail an edit by a moment, so retry briefly before failing.
+          # plus any issue linked by hand in the Development sidebar. Linking
+          # there fires no pull_request event, so re-run this job afterwards.
+          # Only an open issue in this repo counts; a cross-repo or closed one
+          # would pass without anything tracking the change. The parse can
+          # trail an edit by a moment and the API can fail transiently, so
+          # retry briefly before failing; `|| issues=` stops bash -e from
+          # aborting on the first API error.
           for attempt in 1 2 3; do
-            issues=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" \
-              --json closingIssuesReferences \
-              --jq '[.closingIssuesReferences[] | "#\(.number)"] | join(" ")')
+            if [ "$attempt" -gt 1 ]; then sleep 5; fi
+            issues=$(gh api graphql \
+              -f owner="${GITHUB_REPOSITORY%/*}" -f name="${GITHUB_REPOSITORY#*/}" -F number="$PR" \
+              -f query='
+                query($owner: String!, $name: String!, $number: Int!) {
+                  repository(owner: $owner, name: $name) {
+                    pullRequest(number: $number) {
+                      closingIssuesReferences(first: 25) {
+                        nodes { number state repository { nameWithOwner } }
+                      }
+                    }
+                  }
+                }' \
+              --jq '[.data.repository.pullRequest.closingIssuesReferences.nodes[]
+                | select(.state == "OPEN" and .repository.nameWithOwner == env.GITHUB_REPOSITORY)
+                | "#\(.number)"] | join(" ")') || issues=
             if [ -n "$issues" ]; then
               echo "Closes $issues"
               exit 0
             fi
-            sleep 5
           done
-          echo "::error::This PR doesn't close an issue. Open one first, then put 'Closes #<number>' in the description."
+          echo "::error::This PR doesn't close an open issue in this repo. Open one first, then put 'Closes #<number>' in the description."
           exit 1
