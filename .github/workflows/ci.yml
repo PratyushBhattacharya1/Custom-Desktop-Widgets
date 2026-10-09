@@ -44,3 +44,6 @@ jobs:
         # module and then exits 0, so this step catches a module that fails to
         # load, and nothing more.
         run: node scripts/verify-ics.js
+
+      - name: Gmail URL checks
+        run: node scripts/verify-gmail.js
