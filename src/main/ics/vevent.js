@@ -5,7 +5,7 @@
 const { unfold } = require('./unfold');
 const { parseLine } = require('./contentline');
 const { unescapeText } = require('./text');
-const { parseIcsDate, parseDuration } = require('./datetime');
+const { parseIcsDate, parseDuration, addDays } = require('./datetime');
 
 const DAY_MS = 86400000;
 
@@ -78,12 +78,17 @@ function buildEvent(props) {
   if (!ev.start) return null;
 
   // RFC 5545 3.6.1 fallbacks for a missing DTEND. One real event in the sample
-  // export has DTSTART and no DTEND at all.
+  // export has DTSTART and no DTEND at all. An all-day event lasts one day, and
+  // the days of its DURATION are calendar days (3.3.6), so both end on a date.
+  // 24 hours after midnight is 01:00 or 23:00 when the clocks change that day.
   if (!ev.end) {
-    if (durationMs !== null) {
-      ev.end = { ...ev.start, ms: ev.start.ms + durationMs };
-    } else if (ev.start.allDay) {
-      ev.end = { ...ev.start, ms: ev.start.ms + DAY_MS };
+    const days = durationMs === null ? 1 : durationMs / DAY_MS;
+    if (ev.start.allDay && Number.isInteger(days)) {
+      ev.end = addDays(ev.start, days);
+    } else if (durationMs !== null) {
+      // A timed DURATION, or one in hours on a date, which RFC 5545 forbids.
+      // Either way the end is an instant, not a date.
+      ev.end = { ...ev.start, allDay: false, ms: ev.start.ms + durationMs };
     } else {
       ev.end = { ...ev.start };
     }

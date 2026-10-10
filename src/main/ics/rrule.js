@@ -126,11 +126,14 @@ function expandRRule(rruleText, start, windowStart, windowEnd) {
   let iterations = 0;
 
   if (rule.freq === 'WEEKLY') {
-    const days = rule.byDay.length ? rule.byDay : [new Date(start.ms).getDay()];
-
     // Anchor on the Sunday of DTSTART's week, then step whole weeks. Wall-clock
     // date arithmetic via the local Date constructor, never raw ms addition.
     const anchor = new Date(start.y, start.mo - 1, start.d);
+
+    // With no BYDAY, the weekday is that of DTSTART's own wall-clock date.
+    // new Date(start.ms) reads it in the viewer's zone instead, where 08:00 on
+    // a Monday in Tokyo is still Sunday.
+    const days = rule.byDay.length ? rule.byDay : [anchor.getDay()];
     anchor.setDate(anchor.getDate() - anchor.getDay());
 
     // Jump-start: with no COUNT we can skip straight to the window. With COUNT

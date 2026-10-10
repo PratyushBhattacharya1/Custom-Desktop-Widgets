@@ -9,17 +9,29 @@
 // event is an all-day master carrying a *timed* RECURRENCE-ID, which exact
 // datetime equality would never match.
 const { expandRRule } = require('./rrule');
-const { localDateKey } = require('./datetime');
+const { localDateKey, daysBetween } = require('./datetime');
+
+// An all-day instance lasts as many calendar days as its event, counted from
+// the instance's own local midnight. Adding the event's length in ms instead
+// ends an instance at 01:00 the next day when it falls on a 23-hour DST day,
+// and the widget then shows it on that day too.
+function instanceEnd(event, startMs) {
+  if (event.allDay && event.end.allDay) {
+    const s = new Date(startMs);
+    const days = Math.max(0, daysBetween(event.start, event.end));
+    return new Date(s.getFullYear(), s.getMonth(), s.getDate() + days).getTime();
+  }
+  return startMs + Math.max(0, event.end.ms - event.start.ms);
+}
 
 function instanceFrom(event, startMs) {
-  const duration = Math.max(0, event.end.ms - event.start.ms);
   return {
     uid: event.uid,
     summary: event.summary,
     location: event.location,
     allDay: event.allDay,
     startMs,
-    endMs: startMs + duration,
+    endMs: instanceEnd(event, startMs),
   };
 }
 
