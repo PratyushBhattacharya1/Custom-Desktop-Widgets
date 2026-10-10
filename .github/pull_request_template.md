@@ -10,6 +10,7 @@ Closes #
 
 - [ ] `node scripts/check.js`
 - [ ] `node scripts/verify-ics.js` against the calendar export (changes under `src/main/ics/`)
+- [ ] `node scripts/mutate-ics.js` (changes under `src/main/ics/`, `test/fixtures/` or the ICS scripts)
 - [ ] `npm start`, then exercised the affected widget
 - [ ] Updated `docs/privacy.md` (OAuth scopes or stored data changed)
 - [ ] Updated `AGENTS.md` (architecture, invariants or workflow changed)
