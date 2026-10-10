@@ -122,7 +122,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 18 events', events.length === 18, events.length + ' parsed');
+  ok('parses exactly the 20 events', events.length === 20, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -237,6 +237,20 @@ function verifyFixture() {
   // DURATION are calendar days (RFC 5545 3.3.6). Both cross the same Sunday.
   same('an all-day event with no DTEND lasts one day', days('allday-no-end', months(2025, 3, 3)), ['2025-03-09']);
   same('an all-day DURATION counts calendar days', days('allday-duration', months(2025, 3, 3)), ['2025-03-08+2025-03-09']);
+
+  // ------------------------------------------ instances that run into a month
+  // A month shows every instance that overlaps it, however early it starts.
+  // The book fair's 30 January instance runs Thursday to Saturday, 1 February,
+  // and the on-call weekend of 29 August runs to 08:00 on Monday, 1 September.
+  // Both start more than a day before the month they run into. The book fair
+  // has a COUNT, so its expansion walks from DTSTART, and the on-call weekend
+  // has none, so its expansion jump-starts to the window.
+  same('an all-day instance that starts days before the month shows in it',
+       days('allday-multiday-weekly', months(2025, 2, 2)),
+       ['2025-01-30+2025-01-31+2025-02-01', '2025-02-06+2025-02-07+2025-02-08']);
+  same('a timed instance that starts days before the month shows in it',
+       starts('timed-multiday-weekly', months(2025, 9, 9)),
+       ['2025-08-29T22:00Z', '2025-09-05T22:00Z', '2025-09-12T22:00Z']);
 }
 
 // The export suite checks the parser as the widget runs on this machine, so it

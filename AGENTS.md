@@ -98,6 +98,7 @@ Cached feeds load before any network request, so an offline start still renders.
 - Anchor all-day dates to local midnight. An all-day DTEND is exclusive. Count all-day lengths in calendar days, never in milliseconds, because a DST day has 23 or 25 hours. A missing DTEND means one day, a `P<n>D` DURATION means n days, and each instance of a series lasts as many days as its master.
 - Match EXDATE and RECURRENCE-ID by local calendar day, not by exact instant.
 - COUNT counts from DTSTART, so a COUNT rule can't skip ahead to the requested window.
+- A window includes every instance that overlaps it. Expand a series from as far before the window as its master lasts, in calendar days for an all-day series, so an instance that starts days before the window still reaches it.
 - The RRULE engine is deliberately narrow: WEEKLY and YEARLY, plus basic DAILY and MONTHLY.
 - Times display in the machine's current timezone. That is correct conversion, not a bug. There is no configured display timezone.
 
