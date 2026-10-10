@@ -2,20 +2,17 @@
 //
 // A saved position is an anchor, not a coordinate: how far the widget sits from
 // the nearer horizontal and the nearer vertical edge of its display's work area,
-// e.g. { display: 1879209626, right: 8, top: 15 }. Absolute coordinates broke on
-// a laptop whose panel Windows runs at 100% on one GPU and 125% on the other, so
-// the desktop is 1920 DIP wide one session and 1536 the next. A corner spot
-// saved at one scale was past the screen edge at the other, and nothing moved
-// it back. An anchor keeps a corner widget in its corner at any scale.
+// e.g. { display: 1879209626, fingerprint: 'internal:1920x1080', right: 8, top: 15 }.
+// Absolute coordinates broke on a laptop whose panel Windows runs at 100% on one
+// GPU and 125% on the other, so the desktop is 1920 DIP wide one session and
+// 1536 the next. A corner spot saved at one scale was past the screen edge at
+// the other, and nothing moved it back. An anchor keeps a corner widget in its
+// corner at any scale.
 //
 // Everything here is pure (no electron) so scripts/verify-placement.js can run
 // it in plain Node. `displays` is the shape screen.getAllDisplays() returns:
-// [{ id, workArea: { x, y, width, height } }].
-
-// Room left between a widget and the right and bottom of the work area.
-// applySize leaves the same gap when it caps a size, so a widget placed here
-// and then measured doesn't lose height or width to the cap.
-const EDGE_MARGIN = 8;
+// [{ id, workArea: { x, y, width, height }, size, scaleFactor, internal }]. Only
+// id and workArea are required.
 
 // How far a window may sit from where it was put and still count as there. At
 // 125% a DIP coordinate rarely lands on a whole pixel: Windows rounds it, and
@@ -54,11 +51,12 @@ function pickDisplay(rect, displays) {
 }
 
 // Moves the rect, never resizes it, until it lies inside the area. Sizing is
-// applySize's job. A rect too big for the area keeps its left and top edges on
-// screen, because that's where the pin button and the drag strip are.
+// applySize's job. The fit is the same on every side, so a widget can sit flush
+// against any edge. A rect too big for the area keeps its top-left corner on
+// screen, and the rest hangs off the right or bottom.
 function fitRect(rect, area) {
-  const x = Math.max(area.x, Math.min(rect.x, area.x + area.width - EDGE_MARGIN - rect.width));
-  const y = Math.max(area.y, Math.min(rect.y, area.y + area.height - EDGE_MARGIN - rect.height));
+  const x = Math.max(area.x, Math.min(rect.x, area.x + area.width - rect.width));
+  const y = Math.max(area.y, Math.min(rect.y, area.y + area.height - rect.height));
   return { x: Math.round(x), y: Math.round(y), width: rect.width, height: rect.height };
 }
 
@@ -70,7 +68,20 @@ function isAnchor(a) {
   return has('left') !== has('right') && has('top') !== has('bottom');
 }
 
-// Describes the rect by its distance from the nearer edge on each axis.
+// A display's physical size and whether it's built in. Windows can hand the same
+// monitor a new id (a GPU switch or a dock can renumber its outputs), so an
+// anchor carries this too, to recognise its monitor without the id. Undefined
+// for a display that doesn't report its size and scale.
+function fingerprint(display) {
+  if (!display.size || !Number.isFinite(display.scaleFactor)) return undefined;
+  const w = Math.round(display.size.width * display.scaleFactor);
+  const h = Math.round(display.size.height * display.scaleFactor);
+  return (display.internal ? 'internal:' : 'external:') + w + 'x' + h;
+}
+
+// Describes the rect by its distance from the nearer edge on each axis. A rect
+// too big for the area has a negative distance to its far edge, which would pin
+// it to that edge once it shrinks, so it anchors to its left or top instead.
 function toAnchor(rect, display) {
   const area = display.workArea;
   const left = rect.x - area.x;
@@ -78,9 +89,11 @@ function toAnchor(rect, display) {
   const top = rect.y - area.y;
   const bottom = area.y + area.height - (rect.y + rect.height);
   const anchor = { display: display.id };
-  if (left <= right) anchor.left = Math.round(left);
+  const print = fingerprint(display);
+  if (print) anchor.fingerprint = print;
+  if (right < 0 || left <= right) anchor.left = Math.round(left);
   else anchor.right = Math.round(right);
-  if (top <= bottom) anchor.top = Math.round(top);
+  if (bottom < 0 || top <= bottom) anchor.top = Math.round(top);
   else anchor.bottom = Math.round(bottom);
   return anchor;
 }
@@ -93,11 +106,14 @@ function anchorFromRect(rect, displays) {
   return toAnchor(fitRect(rect, display.workArea), display);
 }
 
-// The anchor's own display or, while that one is unplugged, the primary. The
+// The anchor's own display. Failing that (unplugged, or back under a new id),
+// the one display with the anchor's fingerprint, and otherwise the primary. The
 // anchor keeps the original id, so the widget goes back once it's plugged in.
 function anchorDisplay(anchor, displays, primaryId) {
+  const alike = displays.filter((d) => anchor.fingerprint && fingerprint(d) === anchor.fingerprint);
   return (
     displays.find((d) => d.id === anchor.display) ||
+    (alike.length === 1 && alike[0]) ||
     displays.find((d) => d.id === primaryId) ||
     displays[0]
   );
@@ -115,6 +131,27 @@ function fromAnchor(anchor, size, displays, primaryId) {
   return fitRect({ x, y, width: size.width, height: size.height }, area);
 }
 
+// Where a widget goes when its size changes from oldSize to size, and its anchor
+// afterwards. Width grows away from the anchored edge, so a clock in a right-hand
+// corner stays in it. Height always grows down from the current top and moves up
+// only as far as the work area forces it: the calendar's header and day grid are
+// at its top, so they hold still under the cursor while its events panel opens
+// and closes. The vertical edge is then picked again from where the widget ended
+// up, so placing it from the new anchor gives the same rect.
+function resize(anchor, oldSize, size, displays, primaryId) {
+  const display = anchorDisplay(anchor, displays, primaryId);
+  const x = fromAnchor(anchor, size, displays, primaryId).x;
+  const y = fromAnchor(anchor, oldSize, displays, primaryId).y;
+  const rect = fitRect({ x, y, width: size.width, height: size.height }, display.workArea);
+  const picked = toAnchor(rect, display);
+  const next = { ...anchor };
+  delete next.top;
+  delete next.bottom;
+  if ('top' in picked) next.top = picked.top;
+  else next.bottom = picked.bottom;
+  return { rect, anchor: next };
+}
+
 // True when two rects differ by no more than Windows' rounding.
 function closeTo(a, b) {
   return (
@@ -126,6 +163,6 @@ function closeTo(a, b) {
 }
 
 module.exports = {
-  EDGE_MARGIN, DRIFT,
-  pickDisplay, fitRect, isAnchor, toAnchor, anchorFromRect, anchorDisplay, fromAnchor, closeTo,
+  DRIFT,
+  pickDisplay, fitRect, isAnchor, toAnchor, anchorFromRect, anchorDisplay, fromAnchor, resize, closeTo,
 };

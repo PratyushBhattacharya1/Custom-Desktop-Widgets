@@ -7,9 +7,11 @@ const calendarService = require('./src/main/calendar/service');
 const gmailService = require('./src/main/gmail/service');
 
 // ---- Add / remove widgets here ----
+// `fits` names the axes a widget sizes to its content (widgets/shared/autosize.js):
+// 'both', 'height' or none. Main applies and keeps a measured size only on those.
 const WIDGETS = [
-  { id: 'clock', file: 'widgets/clock/index.html', width: 260, height: 260, defaultX: 60, defaultY: 60 },
-  { id: 'calendar', file: 'widgets/calendar/index.html', width: 320, height: 340, defaultX: 360, defaultY: 60 },
+  { id: 'clock', file: 'widgets/clock/index.html', width: 260, height: 260, defaultX: 60, defaultY: 60, fits: 'both' },
+  { id: 'calendar', file: 'widgets/calendar/index.html', width: 320, height: 340, defaultX: 360, defaultY: 60, fits: 'height' },
   { id: 'email', file: 'widgets/email/index.html', width: 360, height: 300, defaultX: 60, defaultY: 360 },
 ];
 
@@ -72,13 +74,24 @@ function createWidget(widget) {
   win.on('show', refreshTray);
   win.on('hide', refreshTray);
 
-  // 'moved' fires when a drag ends, and also when a click on the drag strip ends
-  // without moving anything; rememberPosition tells the two apart. setBounds()
-  // fires 'move' but never 'moved', so placing a widget doesn't land here.
+  // A user drag runs from 'will-move', which fires only for moves the user makes
+  // and never for setBounds(), to 'moved'. rememberPosition re-anchors only after
+  // such a drag, and not after one that ended where it started.
+  win.on('will-move', () => ipc.startDrag(win));
   win.on('moved', () => {
     ipc.rememberPosition(win);
     notifyWorkArea(win);
   });
+
+  // Windows also moves and resizes windows on its own, and its per-window DPI
+  // resize after a scale change can land well after the display event. Put the
+  // widget back whenever that happens. place() leaves a drag and our own
+  // setBounds() alone, and does nothing for a window already where it belongs.
+  const replace = () => {
+    if (!win.isMinimized()) ipc.place(win);
+  };
+  win.on('move', replace);
+  win.on('resize', replace);
 
   windows[widget.id] = win;
 }
@@ -141,9 +154,12 @@ function createTray() {
 }
 
 // Tells a widget which display it's on, so it can recompute its height budget.
+// Only a changed budget is sent: the calendar rebuilds its events list on each
+// one, which scrolls the list back to the top.
 function notifyWorkArea(win) {
   if (win.isDestroyed() || win.webContents.isDestroyed()) return;
-  win.webContents.send('widget:work-area-changed', ipc.workAreaFor(win));
+  const budget = ipc.newWorkArea(win);
+  if (budget) win.webContents.send('widget:work-area-changed', budget);
 }
 
 function notifyAllWorkAreas() {
@@ -153,20 +169,11 @@ function notifyAllWorkAreas() {
 // Windows can resize and rescale every display under the widgets: a GPU switch
 // can flip a laptop panel between 100% and 125%, and a monitor can vanish.
 // Re-place each widget from its anchor, then send it the budget for the
-// display it ended up on.
+// display it ended up on. Windows' own per-window DPI resize can arrive after
+// this; each window's 'move'/'resize' handler re-places it then.
 function placeAll() {
   Object.values(windows).forEach((win) => ipc.place(win));
   notifyAllWorkAreas();
-}
-
-// Windows resizes each window for a new DPI with a message of its own, which
-// can arrive after this event and push a widget off its anchor. So place again
-// once things settle; place() is a no-op for a widget already where it belongs.
-let settleTimer = null;
-function onDisplaysChanged() {
-  placeAll();
-  clearTimeout(settleTimer);
-  settleTimer = setTimeout(placeAll, 500);
 }
 
 app.whenReady().then(() => {
@@ -191,9 +198,9 @@ app.whenReady().then(() => {
     }
   });
 
-  screen.on('display-metrics-changed', onDisplaysChanged);
-  screen.on('display-added', onDisplaysChanged);
-  screen.on('display-removed', onDisplaysChanged);
+  screen.on('display-metrics-changed', placeAll);
+  screen.on('display-added', placeAll);
+  screen.on('display-removed', placeAll);
 });
 
 // Don't lose a debounced write if the app exits mid-timer.

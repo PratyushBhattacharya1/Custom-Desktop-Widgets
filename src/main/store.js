@@ -8,8 +8,9 @@
 // settings.js for its catalogue and sanitiser.
 //
 // `anchor` is the position as distances from screen edges, e.g.
-// { display, right: 8, top: 15 }; see placement.js. `w`/`h` exist only for an
-// axis the widget measures. A missing flag reads as false and a missing size
+// { display, fingerprint, right: 8, top: 15 }; see placement.js. A missing
+// anchor means the registry default. `w`/`h` are read only on an axis the widget
+// measures (`fits` in main.js). A missing flag reads as false and a missing size
 // falls back to the registry default. Files from before anchors held absolute
 // x/y instead; ipc.initialBounds() converts them the first time it reads one.
 //
