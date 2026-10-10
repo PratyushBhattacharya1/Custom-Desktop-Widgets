@@ -59,14 +59,26 @@ const MUTATIONS = [
     'weekStart.setDate(weekStart.getDate() + weekIndex * 7);', 'weekStart.setTime(anchor.getTime() + weekIndex * WEEK_MS);'],
   ['DAILY: days stepped by ms', 'src/main/ics/rrule.js',
     'cursor.setDate(cursor.getDate() + rule.interval);', 'cursor.setTime(cursor.getTime() + rule.interval * DAY_MS);'],
+  // ...and take DTSTART's weekday from that zone too.
+  ['WEEKLY: weekday read in the machine zone', 'src/main/ics/rrule.js',
+    'const days = rule.byDay.length ? rule.byDay : [anchor.getDay()];',
+    'const days = rule.byDay.length ? rule.byDay : [new Date(start.ms).getDay()];'],
 
   // Anchor all-day dates to local midnight. An all-day DTEND is exclusive.
+  // Count all-day lengths in calendar days, never in milliseconds.
   ['all-day: anchored to UTC midnight', 'src/main/ics/datetime.js',
     'ms: new Date(y, mo - 1, d, 0, 0, 0, 0).getTime(),', 'ms: Date.UTC(y, mo - 1, d),'],
+  // An all-day length is counted from the dates, so moving only the DTEND's
+  // ms would change nothing. Move its date.
   ['all-day: DTEND inclusive', 'src/main/ics/vevent.js',
     "case 'DTEND':\n        ev.end = parseIcsDate(p.value, p.params);",
     "case 'DTEND':\n        ev.end = parseIcsDate(p.value, p.params);\n" +
-    '        if (ev.end && ev.end.allDay) ev.end = { ...ev.end, ms: ev.end.ms + DAY_MS };'],
+    '        if (ev.end && ev.end.allDay) ev.end = addDays(ev.end, 1);'],
+  ['all-day: instance length in ms', 'src/main/ics/expand.js',
+    'return new Date(s.getFullYear(), s.getMonth(), s.getDate() + days).getTime();',
+    'return startMs + (event.end.ms - event.start.ms);'],
+  ['all-day: missing DTEND and DURATION in ms', 'src/main/ics/vevent.js',
+    'ev.end = addDays(ev.start, days);', 'ev.end = { ...ev.start, ms: ev.start.ms + days * DAY_MS };'],
 
   // Match EXDATE and RECURRENCE-ID by local calendar day, not by exact instant.
   ['EXDATE: matched by exact instant', 'src/main/ics/expand.js',
