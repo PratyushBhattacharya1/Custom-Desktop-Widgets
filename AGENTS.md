@@ -99,7 +99,7 @@ Cached feeds load before any network request, so an offline start still renders.
 - Anchor all-day dates to local midnight. An all-day DTEND is exclusive.
 - Match EXDATE and RECURRENCE-ID by local calendar day, not by exact instant.
 - COUNT counts from DTSTART, so a COUNT rule can't skip ahead to the requested window.
-- The RRULE engine is deliberately narrow: WEEKLY and YEARLY, plus basic DAILY and MONTHLY.
+- The RRULE engine is deliberately narrow: WEEKLY and YEARLY, plus basic DAILY and MONTHLY. A date the month doesn't have (31 April, 29 February in a common year) is skipped, not rolled into the next month.
 - Times display in the machine's current timezone. That is correct conversion, not a bug. There is no configured display timezone.
 
 `test/fixtures/synthetic.ics` has at least one case for each invariant, and `verify-ics.js` checks them in CI, so breaking one fails the `checks` job. `scripts/mutate-ics.js` is the evidence: it breaks each invariant in a temporary copy of the parser and requires the suite to fail through a named assertion. Its mutations find their target by exact text, so a refactor can leave one stale; the script then fails and names it. That's why CI doesn't run it. When you change an invariant or add one, update the fixture, its expectations and the mutations in the same PR. Keep the fixture made up: no real events, names or addresses. Use `example.com` addresses and `@fixture.invalid` UIDs. The fixture is checked out with CRLF line endings (`.gitattributes`), as real feeds have.

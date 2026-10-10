@@ -95,6 +95,10 @@ const MUTATIONS = [
   ['engine: no MONTHLY', 'src/main/ics/rrule.js', "if (rule.freq === 'MONTHLY') {", "if (rule.freq === 'NONE') {"],
   ['engine: no YEARLY', 'src/main/ics/rrule.js', "if (rule.freq === 'YEARLY') {", "if (rule.freq === 'NONE') {"],
   ['engine: INTERVAL ignored', 'src/main/ics/rrule.js', 'rule.interval = Math.max(1, parseInt(value, 10) || 1);', ''],
+  ['MONTHLY: nonexistent dates rolled over', 'src/main/ics/rrule.js',
+    'if (ms >= start.ms && dayOfMonth <= daysIn(y, mo)) {', 'if (ms >= start.ms) {'],
+  ['YEARLY: nonexistent dates rolled over', 'src/main/ics/rrule.js',
+    'if (ms >= start.ms && baseDay <= daysIn(year, baseMonth)) {', 'if (ms >= start.ms) {'],
 
   // Block nesting and DTEND fallbacks.
   ['VALARM: properties collected at any depth', 'src/main/ics/vevent.js',

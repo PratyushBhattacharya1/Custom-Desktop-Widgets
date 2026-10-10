@@ -129,7 +129,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 14 events', events.length === 14, events.length + ' parsed');
+  ok('parses exactly the 16 events', events.length === 16, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -191,6 +191,15 @@ function verifyFixture() {
   same('DAILY INTERVAL=2 stops on its date-only UNTIL', days('daily-until-date', months(2025, 6, 6)), [
     '2025-06-10', '2025-06-12', '2025-06-14', '2025-06-16',
   ]);
+
+  // ------------------------------------------------------ nonexistent dates
+  // A date the month or year doesn't have is skipped, not rolled into the next
+  // month, and it doesn't count toward COUNT.
+  same('MONTHLY on the 31st skips the shorter months', starts('monthly-31st', months(2025, 1, 8)), [
+    '2025-01-31T17:00Z', '2025-03-31T16:00Z', '2025-05-31T16:00Z', '2025-07-31T16:00Z',
+  ]);
+  same('YEARLY on 29 February skips common years',
+       [2025, 2028].map((y) => days('yearly-leap', months(y, 2, 3)).join()), ['', '2028-02-29']);
 
   // ---------------------------------------------- EXDATE and RECURRENCE-ID
   // Both match an instance by local calendar day, not by exact instant. The
