@@ -98,6 +98,13 @@ function verifyFixture() {
      Intl.DateTimeFormat().resolvedOptions().timeZone);
 
   // -------------------------------------------------------------- unfolding
+  // .gitattributes checks the fixture out with CRLF, as real feeds have. Saved
+  // with LF, it would hide a parser that splits on LF alone, and git would
+  // still call the file unchanged.
+  const bareLf = text.replace(/\r\n/g, '').split('\n').length - 1;
+  ok('the fixture keeps its CRLF line endings', bareLf === 0 && text.includes('\r\n'),
+     bareLf ? bareLf + ' lines end in LF alone; delete the file and check it out again' : '');
+
   // Three folds: inside DTSTART's TZID, inside an ATTENDEE's quoted CN (so its
   // first physical line has no colon, as Google's do), and a SUMMARY continued
   // with a tab.
@@ -335,12 +342,8 @@ ok('date-key matching handles all-day master vs timed RECURRENCE-ID',
    true, mismatched.length + ' such case(s) present in fixture');
 
 // ---------------------------------------------------------------- expansion
-function monthWindow(y, m) {
-  return [new Date(y, m, 1, 0, 0, 0, 0).getTime(), new Date(y, m + 1, 0, 23, 59, 59, 999).getTime()];
-}
-
 // April 2024: dense month with active weekly series in the sample data.
-const [ws, we] = monthWindow(2024, 3);
+const [ws, we] = months(2024, 4, 4);
 const april = expandEvents(allEvents, ws, we);
 ok('expansion produces instances for a dense month', april.length > 0,
    april.length + ' instances in April 2024');
@@ -413,8 +416,8 @@ if (yearly.length) {
 
 // Whole-run performance.
 const perfStart = Date.now();
-for (let m = 0; m < 12; m++) {
-  const [a, b] = monthWindow(2024, m);
+for (let m = 1; m <= 12; m++) {
+  const [a, b] = months(2024, m, m);
   expandEvents(allEvents, a, b);
 }
 const perfMs = Date.now() - perfStart;

@@ -72,8 +72,8 @@ const MUTATIONS = [
   ['EXDATE: matched by exact instant', 'src/main/ics/expand.js',
     'if (exdateKeys.has(key)) continue;', 'if (master.exdates.some((x) => x.ms === ms)) continue;'],
   ['RECURRENCE-ID: matched by exact instant', 'src/main/ics/expand.js',
-    'const key = `${ov.uid}|${localDateKey(ov.recurrenceId.ms)}`;',
-    'const key = `${ov.uid}|${localDateKey(ov.recurrenceId.ms)}|${ov.recurrenceId.ms}`;'],
+    'const override = overrideIndex.get(overrideKey);',
+    'const override = [overrideIndex.get(overrideKey)].find((ov) => ov && ov.recurrenceId.ms === ms);'],
   ['RECURRENCE-ID: overrides moved in from outside the window dropped', 'src/main/ics/expand.js',
     'if (consumed.has(key)) continue;', 'continue;'],
   ['expand: instances left unsorted', 'src/main/ics/expand.js',
@@ -107,13 +107,24 @@ const MUTATIONS = [
 
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'ics-mutants-'));
 
-// The copy has no *.ical.zip in its root, so only the fixture suite runs.
+// The copy has no *.ical.zip in its root, so only the fixture suite runs. It
+// runs in UTC, as in CI: in a zone that already matches New York, deleting the
+// suite's zone pin would change nothing, and that mutation would go uncaught.
 function runSuite() {
-  const r = spawnSync(process.execPath, [path.join(work, 'scripts', 'verify-ics.js')], { cwd: work, encoding: 'utf8' });
-  const failed = (r.stdout || '').split(/\r?\n/).filter((l) => l.startsWith('FAIL  ')).map((l) => l.slice(6).split('  (')[0]);
-  const crash = r.status !== 0 && failed.length === 0
-    ? ((r.stderr || '').split(/\r?\n/).find((l) => /Error/.test(l)) || 'exit ' + r.status)
-    : null;
+  const r = spawnSync(process.execPath, [path.join(work, 'scripts', 'verify-ics.js')], {
+    cwd: work,
+    encoding: 'utf8',
+    env: { ...process.env, TZ: 'UTC' },
+    timeout: 30000, // a mutant that loops forever is named, not waited on
+  });
+  const out = r.stdout || '';
+  const failed = out.split(/\r?\n/).filter((l) => l.startsWith('FAIL  ')).map((l) => l.slice(6).split('  (')[0]);
+  // A run that never printed its tally crashed or timed out, even if some
+  // assertions failed first, and a crash proves nothing.
+  const finished = /^===== \d+ passed, \d+ failed =====\r?$/m.test(out);
+  const crash = r.error ? r.error.message
+    : finished ? null
+    : ((r.stderr || '').split(/\r?\n/).find((l) => /Error/.test(l)) || 'exit ' + r.status);
   return { status: r.status, failed, crash };
 }
 
@@ -132,21 +143,25 @@ try {
   for (const [name, rel, find, replace] of MUTATIONS) {
     const file = path.join(work, rel);
     // With core.autocrlf, a Windows checkout has CRLF and CI has LF. Match
-    // multi-line text either way; the copy is thrown away after the run.
-    const original = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
+    // multi-line text either way, write the mutant with the file's own line
+    // endings (the fixture's CRLF is under test), and restore the exact file.
+    const raw = fs.readFileSync(file, 'utf8');
+    const original = raw.replace(/\r\n/g, '\n');
     if (!original.includes(find)) {
       console.log('STALE   ' + name + '  (text not found in ' + rel + ')');
       continue;
     }
-    fs.writeFileSync(file, original.replace(find, replace));
+    // A function replacement, so `$&` or `$'` in a mutation stays literal.
+    const mutant = original.replace(find, () => replace);
+    fs.writeFileSync(file, raw.includes('\r\n') ? mutant.replace(/\n/g, '\r\n') : mutant);
     const { failed, crash } = runSuite();
-    fs.writeFileSync(file, original);
+    fs.writeFileSync(file, raw);
 
-    if (failed.length) {
+    if (crash) {
+      console.log('CRASH   ' + name + '  (' + crash + ')');
+    } else if (failed.length) {
       caught++;
       console.log('CAUGHT  ' + name + '  (' + failed.length + ' failed, first: ' + failed[0] + ')');
-    } else if (crash) {
-      console.log('CRASH   ' + name + '  (' + crash + ')');
     } else {
       console.log('MISSED  ' + name);
     }
