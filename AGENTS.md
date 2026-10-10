@@ -13,12 +13,13 @@ npm install
 npm start                                     # electron . — opens every widget plus the tray icon
 node scripts/check.js                         # the static checks CI runs: syntax, JSON, secrets
 node scripts/verify-ics.js [export.zip|.ics]  # ICS parser regression suite (plain Node, no Electron)
+node scripts/mutate-ics.js                    # breaks each ICS invariant in a copy; the suite must catch every one
 node scripts/verify-gmail.js                  # Gmail message-id and request-URL checks (plain Node)
 node scripts/verify-placement.js              # widget placement and screen-edge anchor checks (plain Node)
 node --check path/to/file.js                  # syntax check
 ```
 
-- There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js`, `scripts/verify-gmail.js` and `scripts/verify-placement.js` are the only committed tests. Run `verify-ics.js` after any change under `src/main/ics/`, `verify-gmail.js` after any change under `src/main/gmail/`, and `verify-placement.js` after any change to `src/main/placement.js`.
+- There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js`, `scripts/verify-gmail.js` and `scripts/verify-placement.js` are the only committed tests, and `scripts/mutate-ics.js` tests the ICS suite itself. Run `verify-ics.js` and `mutate-ics.js` after any change under `src/main/ics/`, `verify-gmail.js` after any change under `src/main/gmail/`, and `verify-placement.js` after any change to `src/main/placement.js`.
 - `verify-ics.js` runs two suites. The first checks `test/fixtures/synthetic.ics`, a hand-written calendar of made-up events, against exact expectations for each parser invariant (see Calendar pipeline). The script pins `TZ` to America/New_York for that suite, so it gives the same result on every machine and in CI. The second checks a personal Google Calendar export in the machine's own zone: the path you pass, or else the first `*.ical.zip` in the repo root, which is gitignored. Without an export only the fixture runs. The export suite's thresholds are tuned to that export (more than 400 events, instances in April 2024, a March 2024 DST check), so a different export can fail because of the data rather than the code.
 - `npm start` has no dev profile. It reads the real `calendars.local.json` and `gmail.local.json`, polls the real Gmail account, and writes the real saved state in `userData`.
 - The renderers expose `window.__cal`, `window.__mail` and `window.__settings` for an external verification harness that is not in the repo. Keep these hooks when refactoring.
@@ -29,7 +30,7 @@ Every change starts as a GitHub issue and lands through a pull request. A reposi
 
 1. Open an issue with `gh issue create`. Issues are public, so keep feed URLs, OAuth secrets, tokens and email contents out of them.
 2. Branch from an up-to-date `main` as `<issue>-<short-slug>`. `gh issue develop <issue> --checkout` creates the branch and links it to the issue.
-3. Before pushing, run `node scripts/check.js`, `node scripts/verify-ics.js` if you changed `src/main/ics/`, `node scripts/verify-gmail.js` if you changed `src/main/gmail/`, and `node scripts/verify-placement.js` if you changed `src/main/placement.js`.
+3. Before pushing, run `node scripts/check.js`, `node scripts/verify-ics.js` and `node scripts/mutate-ics.js` if you changed `src/main/ics/`, `test/fixtures/` or either script, `node scripts/verify-gmail.js` if you changed `src/main/gmail/`, and `node scripts/verify-placement.js` if you changed `src/main/placement.js`.
 4. Open the PR against `main` with `Closes #<issue>` in the description. The PR template starts with that line, so fill in the number.
 5. Merge once the checks pass. GitHub closes the issue and deletes the branch.
 
@@ -42,7 +43,7 @@ A check's name is its job id. If you rename a job, the ruleset keeps waiting for
 
 `.github/rulesets/main.json` is a hand-kept snapshot of the live ruleset, not its source. GitHub never reads the file and nothing compares the two, and the live ruleset also carries server defaults the file leaves out. The live ruleset is what's enforced. When you change it, update the file in the same PR; `gh api repos/{owner}/{repo}/rulesets` shows the live version.
 
-ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. Neither is a required check, so their findings are advisory.
+ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. Neither is a required check, so neither blocks a merge, but advisory doesn't mean ignorable. Before a PR merges, read every finding in full and judge each point on its merits. ECC Tools truncates long comments, so open each one with `gh api repos/{owner}/{repo}/issues/comments/<id>`. A point is either fixed in the PR, opened as an issue for later, or shown not to apply, with the reason. Post the verdicts as one PR comment so the reviewer can check them. A finding repeated on later commits needs a new verdict only if it changed.
 
 ## Architecture
 
@@ -101,7 +102,7 @@ Cached feeds load before any network request, so an offline start still renders.
 - The RRULE engine is deliberately narrow: WEEKLY and YEARLY, plus basic DAILY and MONTHLY.
 - Times display in the machine's current timezone. That is correct conversion, not a bug. There is no configured display timezone.
 
-`test/fixtures/synthetic.ics` has at least one case for each invariant, and `verify-ics.js` checks them in CI, so breaking one fails the `checks` job. When you change an invariant or add one, update the fixture and its expectations in the same PR. Keep the fixture made up: no real events, names or addresses. Use `example.com` addresses and `@fixture.invalid` UIDs. The fixture is checked out with CRLF line endings (`.gitattributes`), as real feeds have.
+`test/fixtures/synthetic.ics` has at least one case for each invariant, and `verify-ics.js` checks them in CI, so breaking one fails the `checks` job. `scripts/mutate-ics.js` is the evidence: it breaks each invariant in a temporary copy of the parser and requires the suite to fail through a named assertion. Its mutations find their target by exact text, so a refactor can leave one stale; the script then fails and names it. That's why CI doesn't run it. When you change an invariant or add one, update the fixture, its expectations and the mutations in the same PR. Keep the fixture made up: no real events, names or addresses. Use `example.com` addresses and `@fixture.invalid` UIDs. The fixture is checked out with CRLF line endings (`.gitattributes`), as real feeds have.
 
 ### Gmail pipeline
 

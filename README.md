@@ -70,6 +70,7 @@ src/main/ics/               zero-dependency iCalendar parser + recurrence
 widgets/shared/             tokens, pin button, shared scrollbar
 widgets/<name>/index.html   one self-contained widget each
 scripts/verify-ics.js       offline parser regression harness
+scripts/mutate-ics.js       breaks the parser to prove the harness notices
 test/fixtures/synthetic.ics made-up calendar the harness checks in CI
 ```
 
