@@ -122,7 +122,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 17 events', events.length === 17, events.length + ' parsed');
+  ok('parses exactly the 18 events', events.length === 18, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -161,6 +161,13 @@ function verifyFixture() {
   ]);
   same('MONTHLY keeps 18:00 Berlin across the EU DST change', starts('monthly-dst', months(2025, 1, 6)), [
     '2025-01-15T17:00Z', '2025-02-15T17:00Z', '2025-03-15T17:00Z', '2025-04-15T16:00Z', '2025-05-15T16:00Z',
+  ]);
+  // With no BYDAY, WEEKLY repeats on DTSTART's weekday in DTSTART's own zone.
+  // 08:00 on a Monday in Tokyo is still Sunday in New York, so reading the
+  // weekday there moves the series to Tokyo Sundays and drops its first
+  // instance.
+  same('WEEKLY without BYDAY keeps the weekday of its own zone', starts('weekly-tokyo', months(2025, 3, 3)), [
+    '2025-03-02T23:00Z', '2025-03-09T23:00Z', '2025-03-16T23:00Z',
   ]);
 
   // -------------------------------------------------------- COUNT and UNTIL
