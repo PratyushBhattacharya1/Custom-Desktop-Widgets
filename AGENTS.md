@@ -43,7 +43,7 @@ A check's name is its job id. If you rename a job, the ruleset keeps waiting for
 
 `.github/rulesets/main.json` is a hand-kept snapshot of the live ruleset, not its source. GitHub never reads the file and nothing compares the two, and the live ruleset also carries server defaults the file leaves out. The live ruleset is what's enforced. When you change it, update the file in the same PR; `gh api repos/{owner}/{repo}/rulesets` shows the live version.
 
-ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. Neither is a required check, so their findings are advisory.
+ECC Tools and CodeQL (GitHub's default code scanning setup) also check each PR. Neither is a required check, so neither blocks a merge, but advisory doesn't mean ignorable. Before a PR merges, read every finding in full and judge each point on its merits. ECC Tools truncates long comments, so open each one with `gh api repos/{owner}/{repo}/issues/comments/<id>`. A point is either fixed in the PR, opened as an issue for later, or shown not to apply, with the reason. Post the verdicts as one PR comment so the reviewer can check them. A finding repeated on later commits needs a new verdict only if it changed.
 
 ## Architecture
 
