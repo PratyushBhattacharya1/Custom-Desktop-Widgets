@@ -95,7 +95,7 @@ Cached feeds load before any network request, so an offline start still renders.
 
 - Unfold the whole file before parsing any line, because Google folds lines in the middle of parameters.
 - Expand recurrences in the event's own wall-clock timezone (`Intl.DateTimeFormat`). Never step by adding milliseconds, which drifts an hour across DST.
-- Anchor all-day dates to local midnight. An all-day DTEND is exclusive.
+- Anchor all-day dates to local midnight. An all-day DTEND is exclusive. Count all-day lengths in calendar days, never in milliseconds, because a DST day has 23 or 25 hours. A missing DTEND means one day, a `P<n>D` DURATION means n days, and each instance of a series lasts as many days as its master.
 - Match EXDATE and RECURRENCE-ID by local calendar day, not by exact instant.
 - COUNT counts from DTSTART, so a COUNT rule can't skip ahead to the requested window.
 - The RRULE engine is deliberately narrow: WEEKLY and YEARLY, plus basic DAILY and MONTHLY.

@@ -122,7 +122,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 14 events', events.length === 14, events.length + ' parsed');
+  ok('parses exactly the 17 events', events.length === 17, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -209,10 +209,27 @@ function verifyFixture() {
   // All-day dates anchor to local midnight, and DTEND is exclusive: the long
   // weekend runs Saturday to Monday, across New York's 23-hour DST Sunday.
   const allDay = expandEvents(events, ...months(2025, 1, 12)).filter((i) => i.allDay);
+  const atMidnight = (ms) => new Date(ms).getHours() === 0 && new Date(ms).getMinutes() === 0;
   ok('all-day instances start at local midnight',
-     allDay.length > 0 && allDay.every((i) => new Date(i.startMs).getHours() === 0 && new Date(i.startMs).getMinutes() === 0),
+     allDay.length > 0 && allDay.every((i) => atMidnight(i.startMs)),
      allDay.length + ' checked');
+  // They end at one too, a whole number of days later. A DST change makes a
+  // day 23 or 25 hours long, so an end computed in milliseconds lands at
+  // 01:00 or 23:00 instead.
+  const offMidnight = allDay.filter((i) => !atMidnight(i.endMs)).map((i) => i.uid.split('@')[0] + ' ' + iso(i.endMs));
+  ok('all-day instances end at local midnight', offMidnight.length === 0,
+     offMidnight.length ? 'ending ' + offMidnight.join(', ') : allDay.length + ' checked');
   same('an all-day DTEND is exclusive', days('allday-span', months(2025, 3, 3)), ['2025-03-08+2025-03-09+2025-03-10']);
+  // Each instance of an all-day series lasts as many days as its master. The
+  // master's day has 24 hours and 9 March, New York's spring-forward Sunday,
+  // has 23, so 24 hours from that midnight is 01:00 on Monday.
+  same('a recurring all-day instance keeps to its day across DST', days('allday-sunday', months(2025, 3, 3)), [
+    '2025-03-02', '2025-03-09', '2025-03-16',
+  ]);
+  // With no DTEND, an all-day event lasts one day, and the days of an all-day
+  // DURATION are calendar days (RFC 5545 3.3.6). Both cross the same Sunday.
+  same('an all-day event with no DTEND lasts one day', days('allday-no-end', months(2025, 3, 3)), ['2025-03-09']);
+  same('an all-day DURATION counts calendar days', days('allday-duration', months(2025, 3, 3)), ['2025-03-08+2025-03-09']);
 }
 
 // The export suite checks the parser as the widget runs on this machine, so it
