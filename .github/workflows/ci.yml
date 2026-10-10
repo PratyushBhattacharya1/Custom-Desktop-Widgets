@@ -38,11 +38,11 @@ jobs:
       - name: Syntax, JSON and secret checks
         run: node scripts/check.js
 
-      - name: Load the ICS parser
-        # The regression suite needs the personal Google export, which is never
-        # committed. Without it, verify-ics.js still requires every parser
-        # module and then exits 0, so this step catches a module that fails to
-        # load, and nothing more.
+      - name: ICS regression suite
+        # Checks test/fixtures/synthetic.ics against exact expectations. The
+        # script pins TZ to America/New_York for it, so the runner's UTC can't
+        # hide a local-time bug. The suite for the personal Google export runs
+        # only locally, because the export is never committed.
         run: node scripts/verify-ics.js
 
       - name: Gmail URL checks

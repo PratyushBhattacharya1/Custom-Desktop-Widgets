@@ -19,7 +19,7 @@ node --check path/to/file.js                  # syntax check
 ```
 
 - There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js`, `scripts/verify-gmail.js` and `scripts/verify-placement.js` are the only committed tests. Run `verify-ics.js` after any change under `src/main/ics/`, `verify-gmail.js` after any change under `src/main/gmail/`, and `verify-placement.js` after any change to `src/main/placement.js`.
-- With no argument, `verify-ics.js` uses the first `*.ical.zip` in the repo root, which is a gitignored personal Google Calendar export. If it finds no fixture it prints a notice and exits 0, so a pass without a fixture proves nothing. Its thresholds are tuned to that export (more than 400 events, instances in April 2024, a March 2024 DST check), so a different export can fail because of the data rather than the code.
+- `verify-ics.js` runs two suites. The first checks `test/fixtures/synthetic.ics`, a hand-written calendar of made-up events, against exact expectations for each parser invariant (see Calendar pipeline). The script pins `TZ` to America/New_York for that suite, so it gives the same result on every machine and in CI. The second checks a personal Google Calendar export in the machine's own zone: the path you pass, or else the first `*.ical.zip` in the repo root, which is gitignored. Without an export only the fixture runs. The export suite's thresholds are tuned to that export (more than 400 events, instances in April 2024, a March 2024 DST check), so a different export can fail because of the data rather than the code.
 - `npm start` has no dev profile. It reads the real `calendars.local.json` and `gmail.local.json`, polls the real Gmail account, and writes the real saved state in `userData`.
 - The renderers expose `window.__cal`, `window.__mail` and `window.__settings` for an external verification harness that is not in the repo. Keep these hooks when refactoring.
 
@@ -35,7 +35,7 @@ Every change starts as a GitHub issue and lands through a pull request. A reposi
 
 The required checks both run on GitHub Actions:
 
-- `checks` (`.github/workflows/ci.yml`) runs `scripts/check.js`, loads the ICS parser, and runs `scripts/verify-gmail.js` and `scripts/verify-placement.js`. CI has no calendar export, so the ICS regression suite runs only locally.
+- `checks` (`.github/workflows/ci.yml`) runs `scripts/check.js`, `scripts/verify-ics.js`, `scripts/verify-gmail.js` and `scripts/verify-placement.js`. CI has no calendar export, so `verify-ics.js` checks only the synthetic fixture there, and the export suite runs only locally.
 - `linked-issue` (`.github/workflows/linked-issue.yml`) fails unless the PR closes an open issue in this repo. Editing the description re-runs it. Linking the issue from the Development sidebar doesn't, so re-run the job by hand after that.
 
 A check's name is its job id. If you rename a job, the ruleset keeps waiting for a check that never reports, and every PR is blocked. Change the job id, `.github/rulesets/main.json` and the live ruleset together.
@@ -94,12 +94,15 @@ Cached feeds load before any network request, so an offline start still renders.
 `src/main/ics/` is a hand-rolled, zero-dependency subset of RFC 5545 (iCalendar), built to handle real Google exports. Keep these invariants:
 
 - Unfold the whole file before parsing any line, because Google folds lines in the middle of parameters.
-- Expand recurrences in the event's own wall-clock timezone (`Intl.DateTimeFormat`). Never step by adding milliseconds, which drifts an hour across DST.
-- Anchor all-day dates to local midnight. An all-day DTEND is exclusive.
+- Expand recurrences in the event's own wall-clock timezone (`Intl.DateTimeFormat`), and take DTSTART's weekday from that zone too. Never step by adding milliseconds, which drifts an hour across DST.
+- Anchor all-day dates to local midnight. An all-day DTEND is exclusive. Count all-day lengths in calendar days, never in milliseconds, because a DST day has 23 or 25 hours. A missing DTEND means one day, a `P<n>D` DURATION means n days, and each instance of a series lasts as many days as its master.
 - Match EXDATE and RECURRENCE-ID by local calendar day, not by exact instant.
 - COUNT counts from DTSTART, so a COUNT rule can't skip ahead to the requested window.
+- A window includes every instance that overlaps it. Expand a series from as far before the window as its master lasts, in calendar days for an all-day series, so an instance that starts days before the window still reaches it.
 - The RRULE engine is deliberately narrow: WEEKLY and YEARLY, plus basic DAILY and MONTHLY.
 - Times display in the machine's current timezone. That is correct conversion, not a bug. There is no configured display timezone.
+
+`test/fixtures/synthetic.ics` has at least one case for each invariant, and `verify-ics.js` checks them in CI, so breaking one fails the `checks` job. When you change an invariant or add one, update the fixture and its expectations in the same PR. Keep the fixture made up: no real events, names or addresses. Use `example.com` addresses and `@fixture.invalid` UIDs. The fixture is checked out with CRLF line endings (`.gitattributes`), as real feeds have.
 
 ### Gmail pipeline
 
@@ -140,7 +143,7 @@ Rules:
 - These files are gitignored and must stay that way:
   - `calendars.local.json`: a secret iCal URL gives anyone who holds it permanent read access to that calendar.
   - `gmail.local.json`: the OAuth client ID and secret.
-  - `*.ical.zip` and `*.ics`: personal calendar exports.
+  - `*.ical.zip` and `*.ics`: personal calendar exports. The exception is `.ics` files in `test/fixtures/`, which hold only made-up events. `.gitignore` and `scripts/check.js` both allow that folder.
 - The committed templates are `calendars.example.json` and `gmail.example.json`.
 - A feed URL must never reach a log line, a renderer or a filename. Error messages from `net` include the URL, so pass every message through `feed.redact()` or `auth.redact()` (which also masks long tokens). Cache files are named from the validated config `id`, never from the URL.
 - Secret scanning and push protection are on, so GitHub rejects a push that contains a known token format. Don't bypass the rejection. Remove the secret from the branch's commits instead; it never reached GitHub, so there is nothing to rotate.

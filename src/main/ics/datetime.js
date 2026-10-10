@@ -140,6 +140,26 @@ function localDateKey(ms) {
   return `${y}-${m}-${d}`;
 }
 
+// The all-day date `days` calendar days after the all-day `date`. A day is 23
+// or 25 hours long when the clocks change, so this steps the local date
+// instead of adding 86400000 a day, and lands on local midnight either way.
+function addDays(date, days) {
+  const local = new Date(date.y, date.mo - 1, date.d + days);
+  return {
+    ...date,
+    y: local.getFullYear(),
+    mo: local.getMonth() + 1,
+    d: local.getDate(),
+    ms: local.getTime(),
+  };
+}
+
+// Whole calendar days from one all-day date to another. UTC days are all 24
+// hours long, so the difference divides exactly.
+function daysBetween(from, to) {
+  return (Date.UTC(to.y, to.mo - 1, to.d) - Date.UTC(from.y, from.mo - 1, from.d)) / 86400000;
+}
+
 // Parses an ISO-ish DURATION (e.g. -P0DT7H0M0S, P1D, PT30M) into ms.
 function parseDuration(value) {
   const m = /^([+-])?P(?:(\d+)W)?(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$/.exec(
@@ -163,6 +183,8 @@ module.exports = {
   zonedWallToUtc,
   tzOffsetMs,
   localDateKey,
+  addDays,
+  daysBetween,
   parseDuration,
   isValidTimeZone,
 };

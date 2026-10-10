@@ -2,8 +2,14 @@
 //
 //   node scripts/verify-ics.js [path-to-export.zip|path-to.ics]
 //
-// Runs against a real Google Calendar export and asserts the specific traps
-// that hand-rolled ICS parsers fall into. No Electron, no network.
+// Two suites, no Electron, no network:
+//   1. test/fixtures/synthetic.ics, a hand-written calendar of made-up events,
+//      with exact expectations for each parser invariant. It always runs, so
+//      CI runs it.
+//   2. A real Google Calendar export, checked for the specific traps that
+//      hand-rolled ICS parsers fall into. The export is personal and never
+//      committed, so this suite runs only locally: on the path given, or else
+//      on the first *.ical.zip in the repo root.
 const fs = require('fs');
 const path = require('path');
 
@@ -13,6 +19,8 @@ const { parseCalendar } = require('../src/main/ics/vevent');
 const { expandEvents } = require('../src/main/ics/expand');
 const { localDateKey } = require('../src/main/ics/datetime');
 const { readEntries } = require('./read-zip');
+
+const root = path.join(__dirname, '..');
 
 let pass = 0;
 let fail = 0;
@@ -27,25 +35,256 @@ function ok(name, cond, detail) {
   }
 }
 
-function findFixture(argv) {
+// Compares lists exactly, and on a mismatch prints both.
+function same(name, actual, expected) {
+  const got = JSON.stringify(actual);
+  const want = JSON.stringify(expected);
+  ok(name, got === want, got !== want ? 'got ' + got + ', want ' + want : actual.length ? actual.length + ' as expected' : 'none, as expected');
+}
+
+function finish() {
+  console.log('\n===== ' + pass + ' passed, ' + fail + ' failed =====');
+  process.exit(fail === 0 ? 0 : 1);
+}
+
+// ======================================================== synthetic fixture
+
+const FIXTURE = path.join(root, 'test', 'fixtures', 'synthetic.ics');
+
+// The parser's results depend on the machine's zone: all-day dates anchor to
+// local midnight, EXDATE and RECURRENCE-ID match by local day, and the widget
+// asks for local months. The expectations below are written for a viewer in
+// New York, so the suite pins that zone and gets the same result on every
+// machine, CI included. New York is west of UTC, where an all-day date anchored
+// to UTC midnight lands on the previous day, and its DST change comes three
+// weeks before Berlin's, the zone of most of the fixture's timed events.
+const FIXTURE_ZONE = 'America/New_York';
+
+// An instant as a UTC minute, the form the expectations are written in.
+const iso = (ms) => new Date(ms).toISOString().slice(0, 16) + 'Z';
+
+// Local months `from` to `to` of one year, the window shape the widget asks for.
+function months(y, from, to) {
+  return [new Date(y, from - 1, 1).getTime(), new Date(y, to, 0, 23, 59, 59, 999).getTime()];
+}
+
+// The local days an all-day instance shows on, by the calendar widget's own
+// test (widgets/calendar/calendar.js): it covers a day when it ends after the
+// day starts, so an exclusive DTEND never claims its own day.
+function daysCovered(inst) {
+  const days = [];
+  const s = new Date(inst.startMs);
+  for (const d = new Date(s.getFullYear(), s.getMonth(), s.getDate()); d.getTime() < inst.endMs; d.setDate(d.getDate() + 1)) {
+    days.push(localDateKey(d.getTime()));
+  }
+  return days.join('+');
+}
+
+function verifyFixture() {
+  const text = fs.readFileSync(FIXTURE, 'utf8');
+  const events = parseCalendar(text);
+  const uidOf = (name) => name + '@fixture.invalid';
+  const event = (name) => events.find((e) => e.uid === uidOf(name) && !e.recurrenceId) || null;
+  const expand = (name, win) => expandEvents(events, win[0], win[1]).filter((i) => i.uid === uidOf(name));
+  const starts = (name, win) => expand(name, win).map((i) => iso(i.startMs));
+  const titled = (name, win) => expand(name, win).map((i) => iso(i.startMs) + ' ' + i.summary);
+  const days = (name, win) => expand(name, win).map(daysCovered);
+
+  console.log('Fixture: ' + path.relative(root, FIXTURE) + ', viewed from ' + FIXTURE_ZONE + '\n');
+
+  // Nothing else here means anything if the pin didn't take.
+  ok('the fixture zone is pinned',
+     new Date(2025, 0, 1).getTimezoneOffset() === 300 && new Date(2025, 6, 1).getTimezoneOffset() === 240,
+     Intl.DateTimeFormat().resolvedOptions().timeZone);
+
+  // -------------------------------------------------------------- unfolding
+  // Three folds: inside DTSTART's TZID, inside an ATTENDEE's quoted CN (so its
+  // first physical line has no colon, as Google's do), and a SUMMARY continued
+  // with a tab.
+  const physical = text.split(/\r\n|\r|\n/).filter((l) => l !== '');
+  const logical = unfold(text);
+  ok('unfolding joins all three folds', physical.length - logical.length === 3,
+     physical.length + ' physical -> ' + logical.length + ' logical');
+  ok('every unfolded line parses', logical.every((l) => parseLine(l) !== null));
+
+  const folded = event('folded-params');
+  ok('a fold inside the TZID parameter keeps the zoned start',
+     folded !== null && folded.start.tz === 'Europe/Berlin' && iso(folded.start.ms) === '2025-01-15T08:00Z',
+     folded ? folded.start.tz + ' ' + iso(folded.start.ms) : 'event lost');
+  ok('a tab continuation joins without a space', folded !== null && folded.summary === 'Folded across lines',
+     folded && JSON.stringify(folded.summary));
+
+  const attendee = parseLine(logical.find((l) => l.startsWith('ATTENDEE;')) || '');
+  ok('a quoted parameter keeps its colon and semicolon',
+     attendee !== null && attendee.params.CN === 'Doe; Jane: chair' && attendee.value === 'mailto:jane.doe@example.com',
+     attendee && JSON.stringify(attendee.params.CN));
+
+  // ---------------------------------------------------------------- parsing
+  // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
+  // VALARM carries its own SUMMARY. None of them may become or change an event.
+  ok('parses exactly the 20 events', events.length === 20, events.length + ' parsed');
+  const standup = event('weekly-dst');
+  ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
+     standup && JSON.stringify(standup.summary));
+
+  // TEXT unescapes in one left-to-right pass, so "\\n" is a backslash and an n,
+  // not a newline. Only the first unquoted colon ends the property name.
+  const note = event('duration-text');
+  ok('TEXT escapes unescape in one pass',
+     note !== null && note.summary === 'Review: drafts, notes; C:\\new' && note.location === 'Room 4, Floor 2\nNorth wing',
+     note && JSON.stringify(note.summary) + ' ' + JSON.stringify(note.location));
+  ok('DURATION sets the end when DTEND is missing', note !== null && iso(note.end.ms) === '2025-05-20T16:30Z',
+     note && iso(note.end.ms));
+
+  // ------------------------------------------------- wall-clock recurrence
+  // A DST change moves the UTC time of a fixed wall-clock time: 09:00 in Berlin
+  // is 08:00Z until 30 March 2025 and 07:00Z after it. Stepping by days or
+  // weeks of milliseconds keeps the UTC time and moves the wall clock instead.
+  // The weekly series also carries the EXDATE, overrides and UNTIL checked
+  // further down.
+  same('WEEKLY keeps 09:00 Berlin across the EU DST change', titled('weekly-dst', months(2025, 3, 4)), [
+    '2025-03-17T08:00Z Standup',
+    '2025-03-19T08:00Z Standup',
+    '2025-03-24T08:00Z Standup',
+    '2025-03-28T09:00Z Standup (moved to Friday)',
+    '2025-03-31T07:00Z Standup',
+    '2025-04-07T07:00Z Standup',
+    '2025-04-09T12:00Z Standup (afternoon)',
+    '2025-04-14T07:00Z Standup',
+    '2025-04-16T07:00Z Standup',
+  ]);
+  // New York falls back on 2 November 2025, in the viewer's zone as well as
+  // the event's. At 05:30 that day the UTC offset differs from the one at
+  // 05:30Z, so converting the wall time needs datetime.js's second pass.
+  same('DAILY keeps 05:30 New York across the US DST change', starts('daily-dst', months(2025, 10, 11)), [
+    '2025-10-31T09:30Z', '2025-11-01T09:30Z', '2025-11-02T10:30Z', '2025-11-03T10:30Z', '2025-11-04T10:30Z',
+  ]);
+  same('MONTHLY keeps 18:00 Berlin across the EU DST change', starts('monthly-dst', months(2025, 1, 6)), [
+    '2025-01-15T17:00Z', '2025-02-15T17:00Z', '2025-03-15T17:00Z', '2025-04-15T16:00Z', '2025-05-15T16:00Z',
+  ]);
+  // With no BYDAY, WEEKLY repeats on DTSTART's weekday in DTSTART's own zone.
+  // 08:00 on a Monday in Tokyo is still Sunday in New York, so reading the
+  // weekday there moves the series to Tokyo Sundays and drops its first
+  // instance.
+  same('WEEKLY without BYDAY keeps the weekday of its own zone', starts('weekly-tokyo', months(2025, 3, 3)), [
+    '2025-03-02T23:00Z', '2025-03-09T23:00Z', '2025-03-16T23:00Z',
+  ]);
+
+  // -------------------------------------------------------- COUNT and UNTIL
+  // COUNT counts from DTSTART. A rule that skips ahead to the requested window
+  // must not when it has a COUNT, or it starts counting again there. The weekly
+  // course runs across the US fall-back, in Chicago and in the viewer's zone.
+  same('WEEKLY COUNT stops after its fourth instance', starts('weekly-count', months(2025, 10, 11)), [
+    '2025-10-20T17:00Z', '2025-10-27T17:00Z', '2025-11-03T18:00Z', '2025-11-10T18:00Z',
+  ]);
+  same('WEEKLY COUNT counts from DTSTART, not from the window', starts('weekly-count', months(2025, 12, 12)), []);
+  same('YEARLY COUNT counts from DTSTART, not from the window',
+       [2021, 2022, 2023].map((y) => days('yearly-count', months(y, 7, 7)).join()),
+       ['2021-07-04', '2022-07-04', '']);
+  same('YEARLY with neither COUNT nor UNTIL reaches a far-future window',
+       days('yearly-forever', months(2030, 2, 2)), ['2030-02-20']);
+
+  // UNTIL is inclusive in both forms: 07:00Z on 16 April is exactly the last
+  // standup, and the plants get watered on the UNTIL date itself.
+  const lastStandup = starts('weekly-dst', months(2025, 4, 5)).pop();
+  ok('a UTC UNTIL keeps the instance that falls on it', lastStandup === '2025-04-16T07:00Z', 'last ' + lastStandup);
+  same('DAILY INTERVAL=2 stops on its date-only UNTIL', days('daily-until-date', months(2025, 6, 6)), [
+    '2025-06-10', '2025-06-12', '2025-06-14', '2025-06-16',
+  ]);
+
+  // ---------------------------------------------- EXDATE and RECURRENCE-ID
+  // Both match an instance by local calendar day, not by exact instant. The
+  // EXDATE is an hour off its instance, and the all-day series' override has a
+  // timed RECURRENCE-ID (see src/main/ics/expand.js).
+  const onDay = (list, key) => list.filter((i) => localDateKey(i.startMs) === key);
+  const spring = expand('weekly-dst', months(2025, 3, 4));
+  ok('EXDATE removes its instance though their times differ', onDay(spring, '2025-03-26').length === 0);
+  same('RECURRENCE-ID replaces its instance on the same day',
+       onDay(spring, '2025-04-09').map((i) => iso(i.startMs) + ' ' + i.summary),
+       ['2025-04-09T12:00Z Standup (afternoon)']);
+  // The 2 April standup moved to 28 March. Each month must show it once, where
+  // it now is: March has no 2 April instance to swap it into, and April must
+  // drop the original without showing the move.
+  ok('an instance moved into the window from outside it still shows',
+     titled('weekly-dst', months(2025, 3, 3)).includes('2025-03-28T09:00Z Standup (moved to Friday)'));
+  ok('a moved instance leaves its original day', onDay(expand('weekly-dst', months(2025, 4, 4)), '2025-04-02').length === 0);
+  same('a timed RECURRENCE-ID replaces an all-day instance',
+       expand('allday-weekly', months(2025, 3, 3)).map((i) => daysCovered(i) + ' ' + i.summary),
+       ['2025-03-03 Bin day', '2025-03-10 Bin day', '2025-03-18 Bin day (holiday delay)', '2025-03-24 Bin day']);
+
+  // ---------------------------------------------------------------- all-day
+  // All-day dates anchor to local midnight, and DTEND is exclusive: the long
+  // weekend runs Saturday to Monday, across New York's 23-hour DST Sunday.
+  const allDay = expandEvents(events, ...months(2025, 1, 12)).filter((i) => i.allDay);
+  const atMidnight = (ms) => new Date(ms).getHours() === 0 && new Date(ms).getMinutes() === 0;
+  ok('all-day instances start at local midnight',
+     allDay.length > 0 && allDay.every((i) => atMidnight(i.startMs)),
+     allDay.length + ' checked');
+  // They end at one too, a whole number of days later. A DST change makes a
+  // day 23 or 25 hours long, so an end computed in milliseconds lands at
+  // 01:00 or 23:00 instead.
+  const offMidnight = allDay.filter((i) => !atMidnight(i.endMs)).map((i) => i.uid.split('@')[0] + ' ' + iso(i.endMs));
+  ok('all-day instances end at local midnight', offMidnight.length === 0,
+     offMidnight.length ? 'ending ' + offMidnight.join(', ') : allDay.length + ' checked');
+  same('an all-day DTEND is exclusive', days('allday-span', months(2025, 3, 3)), ['2025-03-08+2025-03-09+2025-03-10']);
+  // Each instance of an all-day series lasts as many days as its master. The
+  // master's day has 24 hours and 9 March, New York's spring-forward Sunday,
+  // has 23, so 24 hours from that midnight is 01:00 on Monday.
+  same('a recurring all-day instance keeps to its day across DST', days('allday-sunday', months(2025, 3, 3)), [
+    '2025-03-02', '2025-03-09', '2025-03-16',
+  ]);
+  // With no DTEND, an all-day event lasts one day, and the days of an all-day
+  // DURATION are calendar days (RFC 5545 3.3.6). Both cross the same Sunday.
+  same('an all-day event with no DTEND lasts one day', days('allday-no-end', months(2025, 3, 3)), ['2025-03-09']);
+  same('an all-day DURATION counts calendar days', days('allday-duration', months(2025, 3, 3)), ['2025-03-08+2025-03-09']);
+
+  // ------------------------------------------ instances that run into a month
+  // A month shows every instance that overlaps it, however early it starts.
+  // The book fair's 30 January instance runs Thursday to Saturday, 1 February,
+  // and the on-call weekend of 29 August runs to 08:00 on Monday, 1 September.
+  // Both start more than a day before the month they run into. The book fair
+  // has a COUNT, so its expansion walks from DTSTART, and the on-call weekend
+  // has none, so its expansion jump-starts to the window.
+  same('an all-day instance that starts days before the month shows in it',
+       days('allday-multiday-weekly', months(2025, 2, 2)),
+       ['2025-01-30+2025-01-31+2025-02-01', '2025-02-06+2025-02-07+2025-02-08']);
+  same('a timed instance that starts days before the month shows in it',
+       starts('timed-multiday-weekly', months(2025, 9, 9)),
+       ['2025-08-29T22:00Z', '2025-09-05T22:00Z', '2025-09-12T22:00Z']);
+}
+
+// The export suite checks the parser as the widget runs on this machine, so it
+// gets the machine's own zone back.
+const machineZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+process.env.TZ = FIXTURE_ZONE; // Node re-reads the zone when TZ is assigned
+verifyFixture();
+process.env.TZ = machineZone;
+
+// ========================================================== personal export
+
+function findExport(argv) {
   if (argv[2]) return argv[2];
-  const root = path.join(__dirname, '..');
   const zip = fs.readdirSync(root).find((f) => f.endsWith('.ical.zip'));
   return zip ? path.join(root, zip) : null;
 }
 
-const fixture = findFixture(process.argv);
-if (!fixture || !fs.existsSync(fixture)) {
-  console.log('No fixture found. Pass a .zip or .ics path as the first argument.');
-  console.log('(This harness is optional — it only runs against a sample export.)');
-  process.exit(0);
+const exportPath = findExport(process.argv);
+console.log('');
+if (!exportPath) {
+  console.log('No personal export found, so only the synthetic fixture ran. To check one too,');
+  console.log('pass a .zip or .ics path, or put a *.ical.zip in the repo root.');
+  finish();
+}
+if (!fs.existsSync(exportPath)) {
+  ok('the export exists', false, exportPath);
+  finish();
 }
 
-const sources = fixture.endsWith('.zip')
-  ? readEntries(fixture).filter((e) => e.name.endsWith('.ics'))
-  : [{ name: path.basename(fixture), text: fs.readFileSync(fixture, 'utf8') }];
+const sources = exportPath.endsWith('.zip')
+  ? readEntries(exportPath).filter((e) => e.name.endsWith('.ics'))
+  : [{ name: path.basename(exportPath), text: fs.readFileSync(exportPath, 'utf8') }];
 
-console.log('Fixture: ' + path.basename(fixture));
+console.log('Export:  ' + path.basename(exportPath));
 console.log('Files:   ' + sources.length + '\n');
 
 // ---------------------------------------------------------------- unfolding
@@ -219,5 +458,4 @@ for (let m = 0; m < 12; m++) {
 const perfMs = Date.now() - perfStart;
 ok('expanding 12 months is fast', perfMs < 2000, perfMs + 'ms for a full year');
 
-console.log('\n===== ' + pass + ' passed, ' + fail + ' failed =====');
-process.exit(fail === 0 ? 0 : 1);
+finish();

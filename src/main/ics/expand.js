@@ -9,17 +9,42 @@
 // event is an all-day master carrying a *timed* RECURRENCE-ID, which exact
 // datetime equality would never match.
 const { expandRRule } = require('./rrule');
-const { localDateKey } = require('./datetime');
+const { localDateKey, daysBetween } = require('./datetime');
+
+// An all-day instance lasts as many calendar days as its event, counted from
+// the instance's own local midnight. Adding the event's length in ms instead
+// ends an instance at 01:00 the next day when it falls on a 23-hour DST day,
+// and the widget then shows it on that day too.
+function instanceEnd(event, startMs) {
+  if (event.allDay && event.end.allDay) {
+    const s = new Date(startMs);
+    const days = Math.max(0, daysBetween(event.start, event.end));
+    return new Date(s.getFullYear(), s.getMonth(), s.getDate() + days).getTime();
+  }
+  return startMs + Math.max(0, event.end.ms - event.start.ms);
+}
+
+// The earliest an instance of `event` can start and still reach windowStart:
+// the event's length before it, counted the way instanceEnd() counts it. A
+// fixed margin misses longer instances. With a day, a Thursday-to-Saturday
+// series never produces the instance that covers Saturday the 1st.
+function earliestStart(event, windowStart) {
+  if (event.allDay && event.end.allDay) {
+    const w = new Date(windowStart);
+    const days = Math.max(0, daysBetween(event.start, event.end));
+    return new Date(w.getFullYear(), w.getMonth(), w.getDate() - days).getTime();
+  }
+  return windowStart - Math.max(0, event.end.ms - event.start.ms);
+}
 
 function instanceFrom(event, startMs) {
-  const duration = Math.max(0, event.end.ms - event.start.ms);
   return {
     uid: event.uid,
     summary: event.summary,
     location: event.location,
     allDay: event.allDay,
     startMs,
-    endMs: startMs + duration,
+    endMs: instanceEnd(event, startMs),
   };
 }
 
@@ -54,13 +79,15 @@ function expandEvents(events, windowStart, windowEnd) {
 
     const exdateKeys = new Set(master.exdates.map((d) => localDateKey(d.ms)));
 
-    // Widen the expansion window by a day so an instance that starts just
-    // before the window but runs into it is still produced.
+    // Start early enough to produce an instance that starts before the window
+    // but runs into it. The overlap test below still drops one that ends
+    // before the window. Nothing that starts after the window can overlap it,
+    // and an override moved into the window from there is picked up below.
     const occurrences = expandRRule(
       master.rrule,
       master.start,
-      windowStart - 86400000,
-      windowEnd + 86400000
+      earliestStart(master, windowStart),
+      windowEnd
     );
 
     for (const ms of occurrences) {
