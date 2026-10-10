@@ -1,14 +1,18 @@
 // Persistent per-widget state, written to userData.
 //
-// Shape: { "<widgetId>": { x, y, w, h, pinned, settings: { ... } } }
+// Shape: { "<widgetId>": { anchor, w, h, pinned, settings: { ... } } }
 //
 // Two buckets. The top level is window state — the things the BrowserWindow
 // itself owns and the OS enforces (setBounds, setMovable). `settings` is
 // appearance and behaviour, which only the renderer cares about; see
 // settings.js for its catalogue and sanitiser.
 //
-// Every key is additive, so older state files still load cleanly: a missing
-// flag reads as false and a missing size falls back to the registry default.
+// `anchor` is the position as distances from screen edges, e.g.
+// { display, fingerprint, right: 8, top: 15 }; see placement.js. A missing
+// anchor means the registry default. `w`/`h` are read only on an axis the widget
+// measures (`fits` in main.js). A missing flag reads as false and a missing size
+// falls back to the registry default. Files from before anchors held absolute
+// x/y instead; ipc.initialBounds() converts them the first time it reads one.
 //
 // The filename is historical — it predates everything but x/y — and is kept
 // because renaming it would either lose saved positions or require a fallback

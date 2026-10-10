@@ -7,9 +7,11 @@ const calendarService = require('./src/main/calendar/service');
 const gmailService = require('./src/main/gmail/service');
 
 // ---- Add / remove widgets here ----
+// `fits` names the axes a widget sizes to its content (widgets/shared/autosize.js):
+// 'both', 'height' or none. Main applies and keeps a measured size only on those.
 const WIDGETS = [
-  { id: 'clock', file: 'widgets/clock/index.html', width: 260, height: 260, defaultX: 60, defaultY: 60 },
-  { id: 'calendar', file: 'widgets/calendar/index.html', width: 320, height: 340, defaultX: 360, defaultY: 60 },
+  { id: 'clock', file: 'widgets/clock/index.html', width: 260, height: 260, defaultX: 60, defaultY: 60, fits: 'both' },
+  { id: 'calendar', file: 'widgets/calendar/index.html', width: 320, height: 340, defaultX: 360, defaultY: 60, fits: 'height' },
   { id: 'email', file: 'widgets/email/index.html', width: 360, height: 300, defaultX: 60, defaultY: 360 },
 ];
 
@@ -17,15 +19,18 @@ const windows = {};
 let tray = null;
 
 function createWidget(widget) {
+  // The saved anchor, fitted to today's displays, so a widget can't open
+  // off-screen after the display layout or scale changed. A saved size still
+  // wins over the registry default, so a fitted widget reopens at the size it
+  // settled on rather than snapping after the first measurement.
+  const bounds = ipc.initialBounds(widget.id);
   const saved = store.get(widget.id);
 
   const win = new BrowserWindow({
-    // Saved size wins over the registry default, so a fitted widget reopens at
-    // the size it settled on rather than snapping after the first measurement.
-    width: Number.isFinite(saved.w) ? saved.w : widget.width,
-    height: Number.isFinite(saved.h) ? saved.h : widget.height,
-    x: Number.isFinite(saved.x) ? saved.x : widget.defaultX,
-    y: Number.isFinite(saved.y) ? saved.y : widget.defaultY,
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
     frame: false,          // no title bar / borders
     transparent: true,     // lets rounded/irregular widget shapes show through
     resizable: false,      // no drag-to-resize; the calendar resizes itself via setBounds
@@ -49,6 +54,10 @@ function createWidget(widget) {
   // Identifies this window to IPC handlers, which resolve it from event.sender.
   // The renderer never sends its own id, so one widget can't act on another.
   win.__widgetId = widget.id;
+  // At 125% the constructor comes out 3-4 DIP larger than asked (260x260 opens
+  // as 264x264) while setBounds() lands within a DIP. The email widget never
+  // measures itself, so without this it would keep the inflated size.
+  ipc.place(win);
   win.setMenuBarVisibility(false);
   win.loadFile(widget.file);
 
@@ -65,21 +74,42 @@ function createWidget(widget) {
   win.on('show', refreshTray);
   win.on('hide', refreshTray);
 
-  // setBounds() can emit 'moved' on Windows even when x/y are unchanged, so only
-  // write when the position actually differs. store.patch is itself debounced.
+  // A user drag runs from 'will-move', which fires only for moves the user makes
+  // and never for setBounds(), to 'moved'. rememberPosition re-anchors only after
+  // such a drag, and not after one that ended where it started.
+  win.on('will-move', () => ipc.startDrag(win));
   win.on('moved', () => {
-    const [x, y] = win.getPosition();
-    const prev = store.get(widget.id);
-    if (prev.x === x && prev.y === y) return;
-    store.patch(widget.id, { x, y });
+    ipc.rememberPosition(win);
     notifyWorkArea(win);
   });
+
+  // Windows also moves and resizes windows on its own, and its per-window DPI
+  // resize after a scale change can land well after the display event. Put the
+  // widget back whenever that happens. place() leaves a drag and our own
+  // setBounds() alone, and does nothing for a window already where it belongs.
+  const replace = () => {
+    if (!win.isMinimized()) ipc.place(win);
+  };
+  win.on('move', replace);
+  win.on('resize', replace);
 
   windows[widget.id] = win;
 }
 
 function widgetLabel(id) {
   return id.charAt(0).toUpperCase() + id.slice(1);
+}
+
+// The displays may have changed while a widget was hidden, so place it first.
+function showWidget(win) {
+  ipc.place(win);
+  win.show();
+}
+
+// The escape hatch for a widget that ends up somewhere unhelpful, pinned or not.
+function resetPositions() {
+  Object.values(windows).forEach((win) => ipc.resetPosition(win));
+  notifyAllWorkAreas();
 }
 
 function buildTrayMenu() {
@@ -94,7 +124,7 @@ function buildTrayMenu() {
       click: () => {
         if (!win) return;
         if (win.isVisible()) win.hide();
-        else win.show();
+        else showWidget(win);
       },
     };
   });
@@ -103,8 +133,9 @@ function buildTrayMenu() {
     { label: 'Widgets', enabled: false },
     ...toggleItems,
     { type: 'separator' },
-    { label: 'Show All', click: () => Object.values(windows).forEach((w) => w.show()) },
+    { label: 'Show All', click: () => Object.values(windows).forEach((w) => showWidget(w)) },
     { label: 'Hide All', click: () => Object.values(windows).forEach((w) => w.hide()) },
+    { label: 'Reset Positions', click: resetPositions },
     { type: 'separator' },
     { label: 'Quit', click: () => app.quit() },
   ]);
@@ -123,18 +154,31 @@ function createTray() {
 }
 
 // Tells a widget which display it's on, so it can recompute its height budget.
+// Only a changed budget is sent: the calendar rebuilds its events list on each
+// one, which scrolls the list back to the top.
 function notifyWorkArea(win) {
   if (win.isDestroyed() || win.webContents.isDestroyed()) return;
-  win.webContents.send('widget:work-area-changed', ipc.workAreaFor(win));
+  const budget = ipc.newWorkArea(win);
+  if (budget) win.webContents.send('widget:work-area-changed', budget);
 }
 
 function notifyAllWorkAreas() {
   Object.values(windows).forEach(notifyWorkArea);
 }
 
+// Windows can resize and rescale every display under the widgets: a GPU switch
+// can flip a laptop panel between 100% and 125%, and a monitor can vanish.
+// Re-place each widget from its anchor, then send it the budget for the
+// display it ended up on. Windows' own per-window DPI resize can arrive after
+// this; each window's 'move'/'resize' handler re-places it then.
+function placeAll() {
+  Object.values(windows).forEach((win) => ipc.place(win));
+  notifyAllWorkAreas();
+}
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
-  ipc.register();
+  ipc.register(WIDGETS);
   WIDGETS.forEach((w) => createWidget(w));
   createTray();
 
@@ -154,9 +198,9 @@ app.whenReady().then(() => {
     }
   });
 
-  screen.on('display-metrics-changed', notifyAllWorkAreas);
-  screen.on('display-added', notifyAllWorkAreas);
-  screen.on('display-removed', notifyAllWorkAreas);
+  screen.on('display-metrics-changed', placeAll);
+  screen.on('display-added', placeAll);
+  screen.on('display-removed', placeAll);
 });
 
 // Don't lose a debounced write if the app exits mid-timer.
