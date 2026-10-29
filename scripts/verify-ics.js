@@ -130,7 +130,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 47 events', events.length === 47, events.length + ' parsed');
+  ok('parses exactly the 49 events', events.length === 49, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -365,6 +365,13 @@ function verifyFixture() {
   same('a timed RECURRENCE-ID replaces an all-day instance',
        expand('allday-weekly', months(2025, 3, 3)).map((i) => daysCovered(i) + ' ' + i.summary),
        ['2025-03-03 Bin day', '2025-03-10 Bin day', '2025-03-18 Bin day (holiday delay)', '2025-03-24 Bin day']);
+  // The local day is not the UTC day: in New York in June, 19:30 is 23:30Z and
+  // 20:30 is 00:30Z the next day. The evening class's EXDATE and RECURRENCE-ID
+  // say 20:30 and its instances start at 19:30, so matching by UTC day would
+  // keep the cancelled class and show the moved one twice.
+  same('EXDATE and RECURRENCE-ID match by local day, not UTC day',
+       titled('evening-utc-day', months(2025, 6, 6)),
+       ['2025-06-05T23:30Z Evening class', '2025-06-19T22:00Z Evening class (early)', '2025-06-26T23:30Z Evening class']);
 
   // ---------------------------------------------------------------- all-day
   // All-day dates anchor to local midnight, and DTEND is exclusive: the long
@@ -417,11 +424,19 @@ function verifyFixture() {
 }
 
 // The export suite checks the parser as the widget runs on this machine, so it
-// gets the machine's own zone back.
+// gets back the machine's own zone and TZ exactly as it was. Node re-reads the
+// zone when TZ is assigned but not when it's deleted, so a TZ that was unset
+// is assigned the zone the machine resolved to, then deleted.
+const machineTz = process.env.TZ;
 const machineZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-process.env.TZ = FIXTURE_ZONE; // Node re-reads the zone when TZ is assigned
+process.env.TZ = FIXTURE_ZONE;
 verifyFixture();
-process.env.TZ = machineZone;
+if (machineTz === undefined) {
+  process.env.TZ = machineZone;
+  delete process.env.TZ;
+} else {
+  process.env.TZ = machineTz;
+}
 
 // ========================================================== personal export
 
@@ -459,7 +474,6 @@ ok('unfolding actually joins continuation lines', logical.length < physical.leng
    physical.length + ' physical -> ' + logical.length + ' logical');
 
 // A fold can split before the colon; those lines are unparseable in isolation.
-const unparseablePhysical = physical.filter((l) => !/^[ \t]/.test(l) && parseLine(l) === null).length;
 const unparseableLogical = logical.filter((l) => parseLine(l) === null).length;
 ok('every unfolded line parses', unparseableLogical === 0,
    unparseableLogical + ' unparseable after unfolding');
@@ -468,7 +482,6 @@ ok('every unfolded line parses', unparseableLogical === 0,
 const attendeeLogical = logical.filter((l) => l.startsWith('ATTENDEE')).length;
 ok('ATTENDEE lines recovered by unfolding', attendeeLogical > 0,
    attendeeLogical + ' found (a per-physical-line parser finds 0)');
-void unparseablePhysical;
 
 // ---------------------------------------------------------------- parsing
 let allEvents = [];
@@ -529,14 +542,6 @@ for (const e of allEvents) byUid.set(e.uid, (byUid.get(e.uid) || 0) + 1);
 const busiest = [...byUid.entries()].sort((a, b) => b[1] - a[1])[0];
 ok('heavily-overridden series parsed', busiest[1] > 10,
    busiest[1] + ' blocks share one UID');
-
-// An all-day master with a TIMED RECURRENCE-ID must still match by day.
-const mismatched = overrides.filter((o) => {
-  const m = allEvents.find((e) => e.uid === o.uid && e.rrule);
-  return m && m.allDay && !o.recurrenceId.allDay;
-});
-ok('date-key matching handles all-day master vs timed RECURRENCE-ID',
-   true, mismatched.length + ' such case(s) present in fixture');
 
 // ---------------------------------------------------------------- expansion
 // April 2024: dense month with active weekly series in the sample data.

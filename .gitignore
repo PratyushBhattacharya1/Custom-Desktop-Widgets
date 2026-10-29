@@ -12,7 +12,8 @@ gmail.local.json
 *.ical.zip
 *.ics
 # ...except the parser's test fixtures, which hold only made-up events.
-# scripts/check.js allows the same folder.
+# scripts/check.js allows the same folder, and fails if a file there has a
+# real UID or email address.
 !test/fixtures/*.ics
 
 # Build output

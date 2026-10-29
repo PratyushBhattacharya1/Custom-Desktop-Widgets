@@ -113,7 +113,8 @@ report('JSON parses', jsonProblems, jsonFiles.length + ' files');
 // .gitignore keeps these out of `git add`, but not out of `git add -f`.
 const PRIVATE_FILE = /(^|\/)(calendars|gmail)\.local\.json$|\.ics$|\.ical\.zip$/i;
 // A synthetic calendar committed as a parser test fixture is allowed. The
-// content scan below still checks it for secret addresses.
+// content scan below still checks it for secret addresses, and the fixture
+// scan after it checks that its events are made up.
 const FIXTURE_ICS = /^test\/fixtures\/.+\.ics$/i;
 
 // Credential-equivalent values, wherever they appear. Messages never echo the
@@ -126,20 +127,25 @@ const SECRETS = [
   ['Google OAuth access token', /\bya29\.[A-Za-z0-9_-]{20,}/],
 ];
 
+// A file's text, or null for a binary file, by git's own heuristic. UTF-16
+// text is full of NULs, so check for its BOM before the binary test. Notepad's
+// "Unicode" encoding and Windows PowerShell 5.1's `>` write it.
+function textOf(f) {
+  const buf = fs.readFileSync(path.join(root, f));
+  if (buf[0] === 0xff && buf[1] === 0xfe) return buf.toString('utf16le');
+  if (buf[0] === 0xfe && buf[1] === 0xff) return Buffer.from(buf.subarray(0, buf.length & ~1)).swap16().toString('utf16le');
+  if (buf.subarray(0, 8000).includes(0)) return null;
+  return buf.toString('utf8');
+}
+
 const secretProblems = [];
 for (const f of files) {
   if (PRIVATE_FILE.test(f) && !FIXTURE_ICS.test(f)) {
     secretProblems.push({ file: f, message: 'credential or personal file is in the repo; remove it with git rm --cached' });
     continue;
   }
-  const buf = fs.readFileSync(path.join(root, f));
-  // UTF-16 text is full of NULs, so check for its BOM before the binary test.
-  // Notepad's "Unicode" encoding and Windows PowerShell 5.1's `>` write it.
-  let content;
-  if (buf[0] === 0xff && buf[1] === 0xfe) content = buf.toString('utf16le');
-  else if (buf[0] === 0xfe && buf[1] === 0xff) content = Buffer.from(buf.subarray(0, buf.length & ~1)).swap16().toString('utf16le');
-  else if (buf.subarray(0, 8000).includes(0)) continue; // binary, by git's own heuristic
-  else content = buf.toString('utf8');
+  const content = textOf(f);
+  if (content === null) continue;
   content.split('\n').forEach((text, i) => {
     for (const [name, re] of SECRETS) {
       if (re.test(text)) secretProblems.push({ file: f, line: i + 1, message: name + ' (value not printed)' });
@@ -150,6 +156,46 @@ report('No secrets or personal data', secretProblems, files.length + ' files');
 if (secretProblems.length) {
   console.log('\nA secret that has been pushed is already public. Rotate it (reset the calendar\'s');
   console.log('secret address, or the OAuth client secret); deleting the commit does not revoke it.');
+}
+
+// ------------------------------------------------------------------ fixtures
+// .gitignore lets test/fixtures/*.ics through for the synthetic calendar, which
+// means `git add .` also stages a real export saved there, and one without a
+// secret feed address passes the scan above. Every event has a UID and a real
+// one never ends in @fixture.invalid, so the UID rule catches any export; the
+// address rule catches a real attendee copied into a made-up event. Lines are
+// unfolded first, so a fold can't split an address out of reach. The UIDs'
+// domain is allowed as an address too: .invalid is reserved, so no mailbox can
+// be there.
+const FIXTURE_DOMAINS = new Set(['example.com', 'fixture.invalid']);
+const ADDRESS = /[\w.%+-]+@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)/g;
+
+const fixtures = files.filter((f) => FIXTURE_ICS.test(f));
+const fixtureProblems = [];
+for (const f of fixtures) {
+  const content = textOf(f);
+  if (content === null) {
+    fixtureProblems.push({ file: f, message: 'not a text file, so its events can\'t be checked' });
+    continue;
+  }
+  // Each logical line keeps the number of its first physical line.
+  const lines = [];
+  content.split(/\r\n|\r|\n/).forEach((text, i) => {
+    if ((text[0] === ' ' || text[0] === '\t') && lines.length) lines[lines.length - 1].text += text.slice(1);
+    else lines.push({ line: i + 1, text });
+  });
+  for (const { line, text } of lines) {
+    if (/^UID[;:]/i.test(text) && !text.endsWith('@fixture.invalid')) {
+      fixtureProblems.push({ file: f, line, message: 'UID does not end in @fixture.invalid (value not printed)' });
+    } else if ([...text.matchAll(ADDRESS)].some((m) => !FIXTURE_DOMAINS.has(m[1].toLowerCase()))) {
+      fixtureProblems.push({ file: f, line, message: 'email address outside example.com (value not printed)' });
+    }
+  }
+}
+report('Fixtures hold only made-up events', fixtureProblems, fixtures.length + (fixtures.length === 1 ? ' file' : ' files'));
+if (fixtureProblems.length) {
+  console.log('\nA real calendar export doesn\'t belong in test/fixtures/. Fixture events are made up,');
+  console.log('with UIDs ending in @fixture.invalid and addresses at example.com.');
 }
 
 console.log('\n===== ' + (failures ? failures + ' problem(s) found' : 'all checks passed') + ' =====');
