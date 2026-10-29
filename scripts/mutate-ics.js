@@ -92,6 +92,14 @@ const MUTATIONS = [
   ['expand: instances left unsorted', 'src/main/ics/expand.js',
     'out.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);', ''],
 
+  // A window includes every instance that overlaps it, so a series expands
+  // from as far before the window as its master lasts.
+  ['window: expansion starts a fixed day early', 'src/main/ics/expand.js',
+    'return windowStart - Math.max(0, event.end.ms - event.start.ms);', 'return windowStart - 86400000;'],
+  ['window: expansion starts half the length early', 'src/main/ics/expand.js',
+    'return windowStart - Math.max(0, event.end.ms - event.start.ms);',
+    'return windowStart - Math.max(0, event.end.ms - event.start.ms) / 2;'],
+
   // COUNT counts from DTSTART. A COUNT rule skips ahead to the window only
   // where it counts what it skips: a DAILY rule with no limits.
   ['COUNT: WEEKLY skips ahead anyway', 'src/main/ics/rrule.js',

@@ -25,15 +25,14 @@ function instanceEnd(event, startMs) {
 }
 
 // The earliest an instance of `event` can start and still reach windowStart:
-// the event's length before it, counted the way instanceEnd() counts it. A
-// fixed margin misses longer instances. With a day, a Thursday-to-Saturday
-// series never produces the instance that covers Saturday the 1st.
+// the event's length before it. A fixed margin misses longer instances. With a
+// day, a Thursday-to-Saturday series never produces the instance that covers
+// Saturday the 1st. The length is in ms even for an all-day event, whose
+// instances instanceEnd() measures in calendar days. Across a DST change the
+// two differ by an hour. With a window that starts at local midnight, as a
+// month does, that hour only decides whether an instance that ends exactly at
+// windowStart is produced, and no day of the window shows that one.
 function earliestStart(event, windowStart) {
-  if (event.allDay && event.end.allDay) {
-    const w = new Date(windowStart);
-    const days = Math.max(0, daysBetween(event.start, event.end));
-    return new Date(w.getFullYear(), w.getMonth(), w.getDate() - days).getTime();
-  }
   return windowStart - Math.max(0, event.end.ms - event.start.ms);
 }
 

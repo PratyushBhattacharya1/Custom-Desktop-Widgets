@@ -246,8 +246,10 @@ function verifyFixture() {
   // from its date's local midnight. 23:00 in Honolulu is 04:00 the next day in
   // New York, and midnight in Kiritimati is 05:00 the day before. A jump-start
   // must land far enough short of the window, and a loop must stop far enough
-  // past it, to catch those. expandEvents widens the window by a day, which
-  // hides the near misses, so these call the engine with the exact window.
+  // past it, to catch those. expandEvents passes the end of the window to the
+  // engine as it is, so the month view relies on the engine's own stop. It
+  // starts the engine early by the event's length, which can hide a near miss
+  // at the start, so these call the engine with the exact window.
   const exact = (name, win) => {
     const ev = event(name);
     return ev ? expandRRule(ev.rrule, ev.start, win[0], win[1]).map(iso) : [];
@@ -395,8 +397,9 @@ function verifyFixture() {
   // The book fair's 30 January instance runs Thursday to Saturday, 1 February,
   // and the on-call weekend of 29 August runs to 08:00 on Monday, 1 September.
   // Both start more than a day before the month they run into. The book fair
-  // has a COUNT, so its expansion walks from DTSTART, and the on-call weekend
-  // has none, so its expansion jump-starts to the window.
+  // has a COUNT, so its expansion walks from DTSTART. The on-call weekend has
+  // none and began in 2023, so its expansion jump-starts over two years of
+  // weeks and must still land before the instance that runs into the month.
   same('an all-day instance that starts days before the month shows in it',
        days('allday-multiday-weekly', months(2025, 2, 2)),
        ['2025-01-30+2025-01-31+2025-02-01', '2025-02-06+2025-02-07+2025-02-08']);
