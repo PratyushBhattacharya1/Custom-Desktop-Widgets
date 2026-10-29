@@ -11,6 +11,9 @@ gmail.local.json
 # Personal calendar exports
 *.ical.zip
 *.ics
+# ...except the parser's test fixtures, which hold only made-up events.
+# scripts/check.js allows the same folder.
+!test/fixtures/*.ics
 
 # Build output
 dist/

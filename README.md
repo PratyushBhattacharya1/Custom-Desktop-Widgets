@@ -70,6 +70,8 @@ src/main/ics/               zero-dependency iCalendar parser + recurrence
 widgets/shared/             tokens, pin button, shared scrollbar
 widgets/<name>/index.html   one self-contained widget each
 scripts/verify-ics.js       offline parser regression harness
+scripts/mutate-ics.js       breaks the parser to prove the harness notices
+test/fixtures/synthetic.ics made-up calendar the harness checks in CI
 ```
 
 Renderers are sandboxed with `contextIsolation`, so all file and network access happens in the main process and crosses to widgets over IPC. A widget's identity is resolved from the IPC sender, never from anything the renderer sends, so one widget cannot read or modify another's state.
@@ -80,7 +82,7 @@ Hand-rolled with no dependencies. It handles the things real Google exports actu
 
 **Times are shown in your machine's current timezone**, converted from each event's own `TZID`. A class scheduled for 8 AM Los Angeles displays as 8 PM when your machine is set to Dubai, and shifts by an hour when one zone changes for DST and the other doesn't — the same behaviour Google Calendar shows for the same event. This is correct conversion, not a bug; there is no fixed or configured display timezone anywhere in the code.
 
-Run the regression harness against a Google Calendar export (`.zip` or `.ics`):
+The regression harness always checks `test/fixtures/synthetic.ics`, a calendar of made-up events with a case for each of these traps, and CI runs it on every pull request. Pass a Google Calendar export (`.zip` or `.ics`) to check real data as well:
 
 ```bash
 node scripts/verify-ics.js path/to/export.zip

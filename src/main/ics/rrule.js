@@ -105,6 +105,13 @@ function materialise(start, y, mo, d) {
   return new Date(y, mo - 1, d, start.h, start.mi, start.s).getTime();
 }
 
+// Days in a wall-clock month. RFC 5545 skips a recurrence date that doesn't
+// exist (31 April, 29 February in a common year); the Date constructors would
+// roll it into the next month instead.
+function daysIn(y, mo) {
+  return new Date(Date.UTC(y, mo, 0)).getUTCDate();
+}
+
 function untilExceeded(rule, y, mo, d, ms) {
   if (!rule.until) return false;
   if (rule.untilDateOnly) {
@@ -192,7 +199,7 @@ function expandRRule(rruleText, start, windowStart, windowEnd) {
       if (ms > windowEnd + 366 * DAY_MS) break;
       if (untilExceeded(rule, year, baseMonth, baseDay, ms)) break;
 
-      if (ms >= start.ms) {
+      if (ms >= start.ms && baseDay <= daysIn(year, baseMonth)) {
         emitted++;
         if (rule.count !== null && emitted > rule.count) break;
         if (ms >= windowStart && ms <= windowEnd) out.push(ms);
@@ -230,7 +237,7 @@ function expandRRule(rruleText, start, windowStart, windowEnd) {
       const ms = materialise(start, y, mo, dayOfMonth);
       if (ms > windowEnd) break;
       if (untilExceeded(rule, y, mo, dayOfMonth, ms)) break;
-      if (ms >= start.ms) {
+      if (ms >= start.ms && dayOfMonth <= daysIn(y, mo)) {
         emitted++;
         if (rule.count !== null && emitted > rule.count) break;
         if (ms >= windowStart && ms <= windowEnd) out.push(ms);
