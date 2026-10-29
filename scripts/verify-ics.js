@@ -130,7 +130,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 43 events', events.length === 43, events.length + ' parsed');
+  ok('parses exactly the 47 events', events.length === 47, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -246,8 +246,10 @@ function verifyFixture() {
   // from its date's local midnight. 23:00 in Honolulu is 04:00 the next day in
   // New York, and midnight in Kiritimati is 05:00 the day before. A jump-start
   // must land far enough short of the window, and a loop must stop far enough
-  // past it, to catch those. expandEvents widens the window by a day, which
-  // hides the near misses, so these call the engine with the exact window.
+  // past it, to catch those. expandEvents passes the end of the window to the
+  // engine as it is, so the month view relies on the engine's own stop. It
+  // starts the engine early by the event's length, which can hide a near miss
+  // at the start, so these call the engine with the exact window.
   const exact = (name, win) => {
     const ev = event(name);
     return ev ? expandRRule(ev.rrule, ev.start, win[0], win[1]).map(iso) : [];
@@ -389,6 +391,29 @@ function verifyFixture() {
   // DURATION are calendar days (RFC 5545 3.3.6). Both cross the same Sunday.
   same('an all-day event with no DTEND lasts one day', days('allday-no-end', months(2025, 3, 3)), ['2025-03-09']);
   same('an all-day DURATION counts calendar days', days('allday-duration', months(2025, 3, 3)), ['2025-03-08+2025-03-09']);
+
+  // ------------------------------------------ instances that run into a month
+  // A month shows every instance that overlaps it, however early it starts.
+  // The book fair's 30 January instance runs Thursday to Saturday, 1 February,
+  // and the on-call weekend of 29 August runs to 08:00 on Monday, 1 September.
+  // Both start more than a day before the month they run into. The book fair
+  // has a COUNT, so its expansion walks from DTSTART. The on-call weekend has
+  // none and began in 2023, so its expansion jump-starts over two years of
+  // weeks and must still land before the instance that runs into the month.
+  same('an all-day instance that starts days before the month shows in it',
+       days('allday-multiday-weekly', months(2025, 2, 2)),
+       ['2025-01-30+2025-01-31+2025-02-01', '2025-02-06+2025-02-07+2025-02-08']);
+  same('a timed instance that starts days before the month shows in it',
+       starts('timed-multiday-weekly', months(2025, 9, 9)),
+       ['2025-08-29T22:00Z', '2025-09-05T22:00Z', '2025-09-12T22:00Z']);
+  // An end is exclusive. The weekend shift of 29 August ends at 00:00 on
+  // Monday, 1 September, so it isn't in September. The meter reading has no
+  // length and starts at that midnight, so it is.
+  same('an instance that ends as the month starts is not in it',
+       starts('timed-ends-at-midnight', months(2025, 9, 9)), ['2025-09-05T22:00Z']);
+  same('an instance with no length at the start of the month is in it',
+       [starts('zero-length-midnight', months(2025, 8, 8)), starts('zero-length-midnight', months(2025, 9, 9))],
+       [[], ['2025-09-01T04:00Z']]);
 }
 
 // The export suite checks the parser as the widget runs on this machine, so it
