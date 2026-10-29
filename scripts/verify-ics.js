@@ -130,7 +130,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 45 events', events.length === 45, events.length + ' parsed');
+  ok('parses exactly the 47 events', events.length === 47, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -406,6 +406,14 @@ function verifyFixture() {
   same('a timed instance that starts days before the month shows in it',
        starts('timed-multiday-weekly', months(2025, 9, 9)),
        ['2025-08-29T22:00Z', '2025-09-05T22:00Z', '2025-09-12T22:00Z']);
+  // An end is exclusive. The weekend shift of 29 August ends at 00:00 on
+  // Monday, 1 September, so it isn't in September. The meter reading has no
+  // length and starts at that midnight, so it is.
+  same('an instance that ends as the month starts is not in it',
+       starts('timed-ends-at-midnight', months(2025, 9, 9)), ['2025-09-05T22:00Z']);
+  same('an instance with no length at the start of the month is in it',
+       [starts('zero-length-midnight', months(2025, 8, 8)), starts('zero-length-midnight', months(2025, 9, 9))],
+       [[], ['2025-09-01T04:00Z']]);
 }
 
 // The export suite checks the parser as the widget runs on this machine, so it

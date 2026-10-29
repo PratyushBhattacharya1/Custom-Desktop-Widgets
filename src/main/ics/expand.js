@@ -36,6 +36,14 @@ function earliestStart(event, windowStart) {
   return windowStart - Math.max(0, event.end.ms - event.start.ms);
 }
 
+// Whether an instance belongs in the window: it starts inside it, or starts
+// before and runs into it. An end is exclusive, so an instance that ends at
+// 00:00 on the 1st isn't in that month, but one with no length that starts at
+// windowStart is.
+function overlaps(startMs, endMs, windowStart, windowEnd) {
+  return startMs <= windowEnd && (startMs >= windowStart || endMs > windowStart);
+}
+
 function instanceFrom(event, startMs) {
   return {
     uid: event.uid,
@@ -70,7 +78,7 @@ function expandEvents(events, windowStart, windowEnd) {
   for (const master of masters) {
     if (!master.rrule) {
       // Plain one-off event: include if it overlaps the window at all.
-      if (master.end.ms >= windowStart && master.start.ms <= windowEnd) {
+      if (overlaps(master.start.ms, master.end.ms, windowStart, windowEnd)) {
         out.push(instanceFrom(master, master.start.ms));
       }
       continue;
@@ -98,14 +106,14 @@ function expandEvents(events, windowStart, windowEnd) {
 
       if (override) {
         consumed.add(overrideKey);
-        if (override.end.ms >= windowStart && override.start.ms <= windowEnd) {
+        if (overlaps(override.start.ms, override.end.ms, windowStart, windowEnd)) {
           out.push(instanceFrom(override, override.start.ms));
         }
         continue;
       }
 
       const inst = instanceFrom(master, ms);
-      if (inst.endMs >= windowStart && inst.startMs <= windowEnd) out.push(inst);
+      if (overlaps(inst.startMs, inst.endMs, windowStart, windowEnd)) out.push(inst);
     }
   }
 
@@ -113,7 +121,7 @@ function expandEvents(events, windowStart, windowEnd) {
   // case no base occurrence was generated to swap it into. Pick those up here.
   for (const [key, ov] of overrideIndex) {
     if (consumed.has(key)) continue;
-    if (ov.end.ms >= windowStart && ov.start.ms <= windowEnd) {
+    if (overlaps(ov.start.ms, ov.end.ms, windowStart, windowEnd)) {
       out.push(instanceFrom(ov, ov.start.ms));
     }
   }

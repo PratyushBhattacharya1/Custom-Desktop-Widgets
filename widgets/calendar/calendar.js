@@ -77,7 +77,9 @@
       i.allDay
         // All-day ends are exclusive: a one-day event ends at the next midnight.
         ? i.startMs <= dayEnd && i.endMs > dayStart
-        : i.startMs <= dayEnd && i.endMs >= dayStart
+        // Timed ends are exclusive too, so an event that ends at 00:00 isn't on
+        // the next day. One with no length still shows on the day it starts.
+        : i.startMs <= dayEnd && (i.startMs >= dayStart || i.endMs > dayStart)
     );
   }
 

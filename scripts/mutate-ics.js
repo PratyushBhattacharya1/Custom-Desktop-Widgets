@@ -99,6 +99,12 @@ const MUTATIONS = [
   ['window: expansion starts half the length early', 'src/main/ics/expand.js',
     'return windowStart - Math.max(0, event.end.ms - event.start.ms);',
     'return windowStart - Math.max(0, event.end.ms - event.start.ms) / 2;'],
+  // An end is exclusive, so an instance that ends as the window starts isn't
+  // in it.
+  ['window: an end at windowStart counts as overlap', 'src/main/ics/expand.js',
+    '(startMs >= windowStart || endMs > windowStart)', '(endMs >= windowStart)'],
+  ['window: an instance with no length at windowStart dropped', 'src/main/ics/expand.js',
+    '(startMs >= windowStart || endMs > windowStart)', '(endMs > windowStart)'],
 
   // COUNT counts from DTSTART. A COUNT rule skips ahead to the window only
   // where it counts what it skips: a DAILY rule with no limits.
