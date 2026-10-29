@@ -17,6 +17,7 @@ const { unfold } = require('../src/main/ics/unfold');
 const { parseLine } = require('../src/main/ics/contentline');
 const { parseCalendar } = require('../src/main/ics/vevent');
 const { expandEvents } = require('../src/main/ics/expand');
+const { isSupported } = require('../src/main/ics/rrule');
 const { localDateKey } = require('../src/main/ics/datetime');
 const { readEntries } = require('./read-zip');
 
@@ -129,7 +130,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 16 events', events.length === 16, events.length + ' parsed');
+  ok('parses exactly the 25 events', events.length === 25, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -178,6 +179,8 @@ function verifyFixture() {
     '2025-10-20T17:00Z', '2025-10-27T17:00Z', '2025-11-03T18:00Z', '2025-11-10T18:00Z',
   ]);
   same('WEEKLY COUNT counts from DTSTART, not from the window', starts('weekly-count', months(2025, 12, 12)), []);
+  same('DAILY COUNT counts from DTSTART, not from the window', starts('daily-dst', months(2025, 12, 12)), []);
+  same('MONTHLY COUNT counts from DTSTART, not from the window', starts('monthly-dst', months(2025, 8, 8)), []);
   same('YEARLY COUNT counts from DTSTART, not from the window',
        [2021, 2022, 2023].map((y) => days('yearly-count', months(y, 7, 7)).join()),
        ['2021-07-04', '2022-07-04', '']);
@@ -192,14 +195,63 @@ function verifyFixture() {
     '2025-06-10', '2025-06-12', '2025-06-14', '2025-06-16',
   ]);
 
+  // ------------------------------------------------- skipping to the window
+  // A rule without COUNT skips ahead to the requested window a whole number of
+  // intervals at a time, so it must land on the series' own dates there. A
+  // daily series that began years ago must not run out of instances on the
+  // way, as it did when DAILY walked from DTSTART into MAX_INSTANCES.
+  same('DAILY INTERVAL=2 from 2010 reaches 2030 on its own days', starts('daily-forever', months(2030, 2, 2)), [
+    '2030-02-01T06:00Z', '2030-02-03T06:00Z', '2030-02-05T06:00Z', '2030-02-07T06:00Z', '2030-02-09T06:00Z',
+    '2030-02-11T06:00Z', '2030-02-13T06:00Z', '2030-02-15T06:00Z', '2030-02-17T06:00Z', '2030-02-19T06:00Z',
+    '2030-02-21T06:00Z', '2030-02-23T06:00Z', '2030-02-25T06:00Z', '2030-02-27T06:00Z',
+  ]);
+  same('WEEKLY INTERVAL=2 keeps to its own weeks', starts('weekly-interval', months(2025, 1, 1)), [
+    '2025-01-07T16:00Z', '2025-01-09T16:00Z', '2025-01-21T16:00Z', '2025-01-23T16:00Z',
+  ]);
+  same('WEEKLY INTERVAL=2 keeps to its own weeks in a far-future window', starts('weekly-interval', months(2030, 6, 6)), [
+    '2030-06-04T15:00Z', '2030-06-06T15:00Z', '2030-06-18T15:00Z', '2030-06-20T15:00Z',
+  ]);
+  same('MONTHLY INTERVAL=2 keeps to its own months in a far-future window',
+       starts('monthly-second-tuesday', months(2030, 10, 11)), ['2030-11-12T16:00Z']);
+
   // ------------------------------------------------------ nonexistent dates
   // A date the month or year doesn't have is skipped, not rolled into the next
-  // month, and it doesn't count toward COUNT.
+  // month, and it doesn't count toward COUNT: the three leap days are 2024's,
+  // 2028's and 2032's.
   same('MONTHLY on the 31st skips the shorter months', starts('monthly-31st', months(2025, 1, 8)), [
     '2025-01-31T17:00Z', '2025-03-31T16:00Z', '2025-05-31T16:00Z', '2025-07-31T16:00Z',
   ]);
   same('YEARLY on 29 February skips common years',
-       [2025, 2028].map((y) => days('yearly-leap', months(y, 2, 3)).join()), ['', '2028-02-29']);
+       [2025, 2028, 2032, 2036].map((y) => days('yearly-leap', months(y, 2, 3)).join()),
+       ['', '2028-02-29', '2032-02-29', '']);
+
+  // ------------------------------------------ weekdays and days of the month
+  // MONTHLY and YEARLY pick weekdays of the month by ordinal, where 2TU is the
+  // second Tuesday and -1FR the last Friday, and days of the month from either
+  // end, where -1 is the last day. The last-Friday series starts on the 31st,
+  // so it must not skip short months the way a day-of-month rule does.
+  same('MONTHLY BYDAY=2TU takes the second Tuesday, every other month',
+       starts('monthly-second-tuesday', months(2025, 1, 6)), ['2025-01-14T16:00Z', '2025-03-11T15:00Z', '2025-05-13T15:00Z']);
+  same('MONTHLY BYDAY=-1FR takes the last Friday', starts('monthly-last-friday', months(2025, 1, 6)), [
+    '2025-01-31T15:00Z', '2025-02-28T15:00Z', '2025-03-28T15:00Z', '2025-04-25T14:00Z',
+  ]);
+  same('MONTHLY BYMONTHDAY=15,-1 takes the 15th and the last day', days('monthly-pay-day', months(2025, 1, 6)), [
+    '2025-01-31', '2025-02-15', '2025-02-28', '2025-03-15', '2025-03-31',
+  ]);
+  same('YEARLY BYMONTH=11;BYDAY=4TH takes the fourth Thursday',
+       [2025, 2030].map((y) => days('yearly-thanksgiving', months(y, 11, 11)).join()), ['2025-11-27', '2030-11-28']);
+  same('YEARLY takes each of its BYMONTH months', days('yearly-two-months', months(2026, 1, 12)), ['2026-03-01', '2026-09-01']);
+
+  // A rule part the engine doesn't implement would put instances on wrong
+  // dates if it were ignored, so the series shows its DTSTART alone.
+  same('a rule with BYSETPOS shows only DTSTART', starts('unsupported-setpos', months(2025, 2, 4)), ['2025-02-11T08:00Z']);
+  same('a fortnightly rule with WKST=MO and a Sunday shows only DTSTART',
+       starts('unsupported-wkst', months(2025, 1, 1)), ['2025-01-06T08:00Z']);
+  // An unreadable COUNT or UNTIL would make the series endless, and a month or
+  // day of the month that can't exist would put it on wrong dates.
+  same('a malformed rule is not expanded',
+       ['FREQ=DAILY;COUNT=ten', 'FREQ=DAILY;UNTIL=2025-06-01', 'FREQ=YEARLY;BYMONTH=13',
+        'FREQ=MONTHLY;BYMONTHDAY=0', 'FREQ=WEEKLY;BYDAY=MONDAY', 'FREQ=HOURLY', 'COUNT=3'].filter(isSupported), []);
 
   // ---------------------------------------------- EXDATE and RECURRENCE-ID
   // Both match an instance by local calendar day, not by exact instant. The
@@ -330,6 +382,9 @@ const overrides = allEvents.filter((e) => e.recurrenceId);
 const withEx = allEvents.filter((e) => e.exdates.length > 0);
 
 ok('recurrence masters found', masters.length > 0, masters.length + ' masters');
+// A rule the engine can't expand in full shows only its DTSTART in the widget.
+const partial = masters.filter((e) => !isSupported(e.rrule)).length;
+ok('the RRULE engine expands every rule in full', partial === 0, partial + ' shown as DTSTART only');
 ok('overrides found', overrides.length > 0, overrides.length + ' RECURRENCE-ID events');
 ok('EXDATEs parsed', withEx.length > 0, withEx.length + ' events with exclusions');
 ok('no event is both master and override',

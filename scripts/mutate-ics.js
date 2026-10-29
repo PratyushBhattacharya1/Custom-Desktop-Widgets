@@ -11,11 +11,13 @@
 // the fixture has a gap. A crash means the mutation itself is broken (a typo
 // in its replacement text crashes the suite too), so it proves nothing.
 //
-// A mutation finds its target by exact text, so refactoring the parser can
-// leave one stale. A stale mutation fails the run and is named, never skipped:
-// update its text to match the new code. That brittleness is why CI doesn't
-// run this. Run it after changing src/main/ics/, the fixture or verify-ics.js,
-// and add a mutation for each invariant you add.
+// A mutation finds its target by exact text, which must appear exactly once in
+// its file, so it can't land on a lookalike line elsewhere. Refactoring the
+// parser can leave one stale or repeated. Either fails the run and is named,
+// never skipped: update its text to match the new code, with enough context to
+// be unique. That brittleness is why CI doesn't run this. Run it after changing
+// src/main/ics/, the fixture or verify-ics.js, and add a mutation for each
+// invariant you add.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -81,24 +83,73 @@ const MUTATIONS = [
 
   // COUNT counts from DTSTART, so a COUNT rule can't skip ahead to the window.
   ['COUNT: WEEKLY skips ahead anyway', 'src/main/ics/rrule.js',
-    'if (rule.count === null && windowStart > start.ms) {', 'if (windowStart > start.ms) {'],
+    'if (rule.count === null && windowStart > start.ms) {\n      const weeksAway',
+    'if (windowStart > start.ms) {\n      const weeksAway'],
   ['COUNT: YEARLY skips ahead anyway', 'src/main/ics/rrule.js',
     'if (rule.count === null) {\n      const windowYear', 'if (true) {\n      const windowYear'],
+  ['COUNT: DAILY skips ahead anyway', 'src/main/ics/rrule.js',
+    'if (rule.count === null && windowStart > start.ms) {\n      const daysAway',
+    'if (windowStart > start.ms) {\n      const daysAway'],
+  ['COUNT: MONTHLY skips ahead anyway', 'src/main/ics/rrule.js',
+    'if (rule.count === null && windowStart > start.ms) {\n      const w = new Date(windowStart);',
+    'if (windowStart > start.ms) {\n      const w = new Date(windowStart);'],
+
+  // Without COUNT, a rule skips ahead to the window, a whole number of
+  // intervals at a time.
+  ['DAILY: walks from DTSTART into MAX_INSTANCES', 'src/main/ics/rrule.js',
+    'if (rule.count === null && windowStart > start.ms) {\n      const daysAway',
+    'if (false) {\n      const daysAway'],
+  ['DAILY: skips ahead off the INTERVAL grid', 'src/main/ics/rrule.js',
+    'cursor.setDate(cursor.getDate() + daysAway - (daysAway % rule.interval));',
+    'cursor.setDate(cursor.getDate() + daysAway);'],
+  ['WEEKLY: skips ahead off the INTERVAL grid', 'src/main/ics/rrule.js',
+    'weeksAway - (weeksAway % rule.interval) - rule.interval', 'weeksAway - rule.interval'],
+  ['MONTHLY: skips ahead off the INTERVAL grid', 'src/main/ics/rrule.js',
+    'start.mo - 1 + monthsAway - (monthsAway % rule.interval)', 'start.mo - 1 + monthsAway'],
 
   // UNTIL is inclusive, in its datetime and its date form.
   ['UNTIL: datetime form exclusive', 'src/main/ics/rrule.js', 'return ms > rule.until.ms;', 'return ms >= rule.until.ms;'],
   ['UNTIL: date form exclusive', 'src/main/ics/rrule.js', 'return d > u.d;', 'return d >= u.d;'],
   ['UNTIL: date form ignored', 'src/main/ics/rrule.js', 'if (/^\\d{8}$/.test(value)) {', 'if (false) {'],
 
-  // The RRULE engine: WEEKLY and YEARLY, plus basic DAILY and MONTHLY.
+  // The RRULE engine: DAILY, WEEKLY with BYDAY, MONTHLY with BYMONTHDAY or
+  // BYDAY, and YEARLY with BYMONTH plus either.
   ['engine: no DAILY', 'src/main/ics/rrule.js', "if (rule.freq === 'DAILY') {", "if (rule.freq === 'NONE') {"],
   ['engine: no MONTHLY', 'src/main/ics/rrule.js', "if (rule.freq === 'MONTHLY') {", "if (rule.freq === 'NONE') {"],
   ['engine: no YEARLY', 'src/main/ics/rrule.js', "if (rule.freq === 'YEARLY') {", "if (rule.freq === 'NONE') {"],
   ['engine: INTERVAL ignored', 'src/main/ics/rrule.js', 'rule.interval = Math.max(1, parseInt(value, 10) || 1);', ''],
-  ['MONTHLY: nonexistent dates rolled over', 'src/main/ics/rrule.js',
-    'if (ms >= start.ms && dayOfMonth <= daysIn(y, mo)) {', 'if (ms >= start.ms) {'],
-  ['YEARLY: nonexistent dates rolled over', 'src/main/ics/rrule.js',
-    'if (ms >= start.ms && baseDay <= daysIn(year, baseMonth)) {', 'if (ms >= start.ms) {'],
+  ['WEEKLY: INTERVAL ignored', 'src/main/ics/rrule.js', 'weekIndex += rule.interval;', 'weekIndex += 1;'],
+  ['nonexistent dates rolled over', 'src/main/ics/rrule.js',
+    '.filter((d) => d >= 1 && d <= last)', '.filter((d) => d >= 1)'],
+  ['BYMONTHDAY: negative days not counted from the end', 'src/main/ics/rrule.js',
+    '(n > 0 ? n : last + 1 + n)', 'n'],
+  ['BYDAY: ignored outside WEEKLY', 'src/main/ics/rrule.js',
+    '} else if (rule.byDayNth.length) {', '} else if (false) {'],
+  ['BYDAY: ordinal ignored', 'src/main/ics/rrule.js',
+    'if (n === 0) days.push(...dates);', 'if (true) days.push(...dates);'],
+  ['BYDAY: negative ordinal counted from the start', 'src/main/ics/rrule.js',
+    'dates[dates.length + n]', 'dates[-n - 1]'],
+  ['YEARLY: only the first BYMONTH', 'src/main/ics/rrule.js',
+    'const months = rule.byMonth.length ? rule.byMonth : [start.mo];', 'const months = [rule.byMonth[0] || start.mo];'],
+
+  // A rule with a part the engine doesn't implement shows only DTSTART.
+  ['unsupported: rule expanded anyway', 'src/main/ics/rrule.js',
+    'if (!rule || !supported(rule)) {', 'if (!rule) {'],
+  ['unsupported: unknown rule part accepted', 'src/main/ics/rrule.js',
+    '// BYSETPOS, BYWEEKNO, BYYEARDAY, BYHOUR and the rest.\n        rule.unsupported = true;',
+    '// BYSETPOS, BYWEEKNO, BYYEARDAY, BYHOUR and the rest.'],
+  ['unsupported: WKST ignored', 'src/main/ics/rrule.js',
+    ' && !(rule.interval > 1 && rule.byDay.some((d) => d < DAY_CODES[rule.wkst]))', ''],
+  ['unsupported: unreadable COUNT accepted', 'src/main/ics/rrule.js',
+    'if (rule.count === null || rule.count < 0) rule.unsupported = true;', ''],
+  ['unsupported: unreadable UNTIL accepted', 'src/main/ics/rrule.js',
+    'rule.unsupported = true; // an unreadable UNTIL would make the series endless', ''],
+  ['unsupported: impossible BYMONTH accepted', 'src/main/ics/rrule.js',
+    'if (!rule.byMonth.every((mo) => Number.isInteger(mo) && mo >= 1 && mo <= 12)) rule.unsupported = true;', ''],
+  ['unsupported: impossible BYMONTHDAY accepted', 'src/main/ics/rrule.js',
+    'if (!rule.byMonthDay.every((d) => Number.isInteger(d) && d !== 0 && d >= -31 && d <= 31)) rule.unsupported = true;', ''],
+  ['unsupported: unreadable BYDAY skipped', 'src/main/ics/rrule.js',
+    'if (!m) {\n            rule.unsupported = true;\n            continue;\n          }', 'if (!m) continue;'],
 
   // Block nesting and DTEND fallbacks.
   ['VALARM: properties collected at any depth', 'src/main/ics/vevent.js',
@@ -151,8 +202,13 @@ try {
     // endings (the fixture's CRLF is under test), and restore the exact file.
     const raw = fs.readFileSync(file, 'utf8');
     const original = raw.replace(/\r\n/g, '\n');
-    if (!original.includes(find)) {
+    const hits = original.split(find).length - 1;
+    if (hits === 0) {
       console.log('STALE   ' + name + '  (text not found in ' + rel + ')');
+      continue;
+    }
+    if (hits > 1) {
+      console.log('REPEATED ' + name + '  (text found ' + hits + ' times in ' + rel + ')');
       continue;
     }
     // A function replacement, so `$&` or `$'` in a mutation stays literal.
