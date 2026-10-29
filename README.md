@@ -78,7 +78,7 @@ Renderers are sandboxed with `contextIsolation`, so all file and network access 
 
 ### The iCalendar parser
 
-Hand-rolled with no dependencies. It handles the things real Google exports actually contain: line folding that splits mid-parameter, quoted parameter values, `\,`/`\;`/`\n` escaping, all three DTSTART forms, exclusive all-day DTENDs, `RRULE` (daily, weekly, monthly and yearly, including "second Tuesday" and "last day of the month" rules), `EXDATE`, and `RECURRENCE-ID` overrides matched by calendar day. Timezone conversion uses `Intl.DateTimeFormat` — recurrences expand in the event's own wall-clock zone so a weekly 8 AM class doesn't drift an hour across a DST change.
+Hand-rolled with no dependencies. It handles the things real Google exports actually contain: line folding that splits mid-parameter, quoted parameter values, `\,`/`\;`/`\n` escaping, all three DTSTART forms, exclusive all-day DTENDs, `RRULE` (daily, weekly, monthly and yearly, including "every weekday", "second Tuesday" and "last day of the month" rules), `EXDATE`, and `RECURRENCE-ID` overrides matched by calendar day. Timezone conversion uses `Intl.DateTimeFormat` — recurrences expand in the event's own wall-clock zone so a weekly 8 AM class doesn't drift an hour across a DST change.
 
 **Times are shown in your machine's current timezone**, converted from each event's own `TZID`. A class scheduled for 8 AM Los Angeles displays as 8 PM when your machine is set to Dubai, and shifts by an hour when one zone changes for DST and the other doesn't — the same behaviour Google Calendar shows for the same event. This is correct conversion, not a bug; there is no fixed or configured display timezone anywhere in the code.
 
