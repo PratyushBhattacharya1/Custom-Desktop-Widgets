@@ -291,11 +291,19 @@ function verifyFixture() {
 }
 
 // The export suite checks the parser as the widget runs on this machine, so it
-// gets the machine's own zone back.
+// gets back the machine's own zone and TZ exactly as it was. Node re-reads the
+// zone when TZ is assigned but not when it's deleted, so a TZ that was unset
+// is assigned the zone the machine resolved to, then deleted.
+const machineTz = process.env.TZ;
 const machineZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-process.env.TZ = FIXTURE_ZONE; // Node re-reads the zone when TZ is assigned
+process.env.TZ = FIXTURE_ZONE;
 verifyFixture();
-process.env.TZ = machineZone;
+if (machineTz === undefined) {
+  process.env.TZ = machineZone;
+  delete process.env.TZ;
+} else {
+  process.env.TZ = machineTz;
+}
 
 // ========================================================== personal export
 
@@ -333,7 +341,6 @@ ok('unfolding actually joins continuation lines', logical.length < physical.leng
    physical.length + ' physical -> ' + logical.length + ' logical');
 
 // A fold can split before the colon; those lines are unparseable in isolation.
-const unparseablePhysical = physical.filter((l) => !/^[ \t]/.test(l) && parseLine(l) === null).length;
 const unparseableLogical = logical.filter((l) => parseLine(l) === null).length;
 ok('every unfolded line parses', unparseableLogical === 0,
    unparseableLogical + ' unparseable after unfolding');
@@ -342,7 +349,6 @@ ok('every unfolded line parses', unparseableLogical === 0,
 const attendeeLogical = logical.filter((l) => l.startsWith('ATTENDEE')).length;
 ok('ATTENDEE lines recovered by unfolding', attendeeLogical > 0,
    attendeeLogical + ' found (a per-physical-line parser finds 0)');
-void unparseablePhysical;
 
 // ---------------------------------------------------------------- parsing
 let allEvents = [];
@@ -403,14 +409,6 @@ for (const e of allEvents) byUid.set(e.uid, (byUid.get(e.uid) || 0) + 1);
 const busiest = [...byUid.entries()].sort((a, b) => b[1] - a[1])[0];
 ok('heavily-overridden series parsed', busiest[1] > 10,
    busiest[1] + ' blocks share one UID');
-
-// An all-day master with a TIMED RECURRENCE-ID must still match by day.
-const mismatched = overrides.filter((o) => {
-  const m = allEvents.find((e) => e.uid === o.uid && e.rrule);
-  return m && m.allDay && !o.recurrenceId.allDay;
-});
-ok('date-key matching handles all-day master vs timed RECURRENCE-ID',
-   true, mismatched.length + ' such case(s) present in fixture');
 
 // ---------------------------------------------------------------- expansion
 // April 2024: dense month with active weekly series in the sample data.
