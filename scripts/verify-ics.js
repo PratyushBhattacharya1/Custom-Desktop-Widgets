@@ -130,7 +130,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 25 events', events.length === 25, events.length + ' parsed');
+  ok('parses exactly the 27 events', events.length === 27, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -272,6 +272,13 @@ function verifyFixture() {
   same('a timed RECURRENCE-ID replaces an all-day instance',
        expand('allday-weekly', months(2025, 3, 3)).map((i) => daysCovered(i) + ' ' + i.summary),
        ['2025-03-03 Bin day', '2025-03-10 Bin day', '2025-03-18 Bin day (holiday delay)', '2025-03-24 Bin day']);
+  // The local day is not the UTC day: in New York in June, 19:30 is 23:30Z and
+  // 20:30 is 00:30Z the next day. The evening class's EXDATE and RECURRENCE-ID
+  // say 20:30 and its instances start at 19:30, so matching by UTC day would
+  // keep the cancelled class and show the moved one twice.
+  same('EXDATE and RECURRENCE-ID match by local day, not UTC day',
+       titled('evening-utc-day', months(2025, 6, 6)),
+       ['2025-06-05T23:30Z Evening class', '2025-06-19T22:00Z Evening class (early)', '2025-06-26T23:30Z Evening class']);
 
   // ---------------------------------------------------------------- all-day
   // All-day dates anchor to local midnight, and DTEND is exclusive: the long
