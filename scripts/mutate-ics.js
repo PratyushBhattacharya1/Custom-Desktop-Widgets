@@ -61,14 +61,25 @@ const MUTATIONS = [
     'weekStart.setDate(weekStart.getDate() + weekIndex * 7);', 'weekStart.setTime(anchor.getTime() + weekIndex * WEEK_MS);'],
   ['DAILY: days stepped by ms', 'src/main/ics/rrule.js',
     'cursor.setDate(cursor.getDate() + rule.interval);', 'cursor.setTime(cursor.getTime() + rule.interval * DAY_MS);'],
+  // ...and take DTSTART's weekday from that zone too.
+  ['WEEKLY: weekday read in the machine zone', 'src/main/ics/rrule.js',
+    ': [weekday(start.y, start.mo, start.d)];', ': [new Date(start.ms).getDay()];'],
 
   // Anchor all-day dates to local midnight. An all-day DTEND is exclusive.
+  // Count all-day lengths in calendar days, never in milliseconds.
   ['all-day: anchored to UTC midnight', 'src/main/ics/datetime.js',
     'ms: new Date(y, mo - 1, d, 0, 0, 0, 0).getTime(),', 'ms: Date.UTC(y, mo - 1, d),'],
+  // An all-day length is counted from the dates, so moving only the DTEND's
+  // ms would change nothing. Move its date.
   ['all-day: DTEND inclusive', 'src/main/ics/vevent.js',
     "case 'DTEND':\n        ev.end = parseIcsDate(p.value, p.params);",
     "case 'DTEND':\n        ev.end = parseIcsDate(p.value, p.params);\n" +
-    '        if (ev.end && ev.end.allDay) ev.end = { ...ev.end, ms: ev.end.ms + DAY_MS };'],
+    '        if (ev.end && ev.end.allDay) ev.end = addDays(ev.end, 1);'],
+  ['all-day: instance length in ms', 'src/main/ics/expand.js',
+    'return new Date(s.getFullYear(), s.getMonth(), s.getDate() + days).getTime();',
+    'return startMs + (event.end.ms - event.start.ms);'],
+  ['all-day: missing DTEND and DURATION in ms', 'src/main/ics/vevent.js',
+    'ev.end = addDays(ev.start, days);', 'ev.end = { ...ev.start, ms: ev.start.ms + days * DAY_MS };'],
 
   // Match EXDATE and RECURRENCE-ID by local calendar day, not by exact instant.
   ['EXDATE: matched by exact instant', 'src/main/ics/expand.js',
@@ -77,57 +88,94 @@ const MUTATIONS = [
     'const override = overrideIndex.get(overrideKey);',
     'const override = [overrideIndex.get(overrideKey)].find((ov) => ov && ov.recurrenceId.ms === ms);'],
   ['EXDATE and RECURRENCE-ID: matched by UTC day', 'src/main/ics/expand.js',
-    "const { localDateKey } = require('./datetime');",
+    "const { localDateKey, daysBetween } = require('./datetime');",
+    "const { daysBetween } = require('./datetime');\n" +
     'const localDateKey = (ms) => new Date(ms).toISOString().slice(0, 10);'],
   ['RECURRENCE-ID: overrides moved in from outside the window dropped', 'src/main/ics/expand.js',
     'if (consumed.has(key)) continue;', 'continue;'],
   ['expand: instances left unsorted', 'src/main/ics/expand.js',
     'out.sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);', ''],
 
-  // COUNT counts from DTSTART, so a COUNT rule can't skip ahead to the window.
+  // A window includes every instance that overlaps it, so a series expands
+  // from as far before the window as its master lasts.
+  ['window: expansion starts a fixed day early', 'src/main/ics/expand.js',
+    'return windowStart - Math.max(0, event.end.ms - event.start.ms);', 'return windowStart - 86400000;'],
+  ['window: expansion starts half the length early', 'src/main/ics/expand.js',
+    'return windowStart - Math.max(0, event.end.ms - event.start.ms);',
+    'return windowStart - Math.max(0, event.end.ms - event.start.ms) / 2;'],
+  // An end is exclusive, so an instance that ends as the window starts isn't
+  // in it.
+  ['window: an end at windowStart counts as overlap', 'src/main/ics/expand.js',
+    '(startMs >= windowStart || endMs > windowStart)', '(endMs >= windowStart)'],
+  ['window: an instance with no length at windowStart dropped', 'src/main/ics/expand.js',
+    '(startMs >= windowStart || endMs > windowStart)', '(endMs > windowStart)'],
+
+  // COUNT counts from DTSTART. A COUNT rule skips ahead to the window only
+  // where it counts what it skips: a DAILY rule with no limits.
   ['COUNT: WEEKLY skips ahead anyway', 'src/main/ics/rrule.js',
     'if (rule.count === null && windowStart > start.ms) {\n      const weeksAway',
     'if (windowStart > start.ms) {\n      const weeksAway'],
   ['COUNT: YEARLY skips ahead anyway', 'src/main/ics/rrule.js',
     'if (rule.count === null) {\n      const windowYear', 'if (true) {\n      const windowYear'],
-  ['COUNT: DAILY skips ahead anyway', 'src/main/ics/rrule.js',
-    'if (rule.count === null && windowStart > start.ms) {\n      const daysAway',
-    'if (windowStart > start.ms) {\n      const daysAway'],
   ['COUNT: MONTHLY skips ahead anyway', 'src/main/ics/rrule.js',
     'if (rule.count === null && windowStart > start.ms) {\n      const w = new Date(windowStart);',
     'if (windowStart > start.ms) {\n      const w = new Date(windowStart);'],
+  ['COUNT: DAILY with limits skips ahead anyway', 'src/main/ics/rrule.js',
+    'if ((rule.count === null || !limited) && windowStart > start.ms) {', 'if (windowStart > start.ms) {'],
+  ['COUNT: DAILY skips ahead without counting', 'src/main/ics/rrule.js',
+    'emitted += skip / rule.interval - 1;', ''],
+  ['COUNT: DAILY counts DTSTART again when it skips ahead', 'src/main/ics/rrule.js',
+    'emitted += skip / rule.interval - 1;', 'emitted += skip / rule.interval;'],
+  ['COUNT: MAX_INSTANCES counts the instances before the window', 'src/main/ics/rrule.js',
+    'out.length < MAX_INSTANCES', 'emitted < MAX_INSTANCES'],
+
+  // DTSTART is always the first instance, and counts toward COUNT, even when
+  // it isn't one of the rule's own dates.
+  ['DTSTART: not counted toward COUNT', 'src/main/ics/rrule.js',
+    'let emitted = 1; // DTSTART', 'let emitted = 0;'],
+  ['DTSTART: shown only when the rule picks it', 'src/main/ics/rrule.js',
+    'if (!rule || !supported(rule)) return out;', 'if (!rule || !supported(rule)) return out;\n  out.length = 0;'],
 
   // Without COUNT, a rule skips ahead to the window, a whole number of
   // intervals at a time.
-  ['DAILY: walks from DTSTART into MAX_INSTANCES', 'src/main/ics/rrule.js',
-    'if (rule.count === null && windowStart > start.ms) {\n      const daysAway',
-    'if (false) {\n      const daysAway'],
+  ['DAILY: walks from DTSTART into MAX_ITERATIONS', 'src/main/ics/rrule.js',
+    'if ((rule.count === null || !limited) && windowStart > start.ms) {', 'if (false) {'],
   ['DAILY: skips ahead off the INTERVAL grid', 'src/main/ics/rrule.js',
-    'cursor.setDate(cursor.getDate() + daysAway - (daysAway % rule.interval));',
-    'cursor.setDate(cursor.getDate() + daysAway);'],
+    'const skip = daysAway - (daysAway % rule.interval);', 'const skip = daysAway;'],
   ['WEEKLY: skips ahead off the INTERVAL grid', 'src/main/ics/rrule.js',
     'weeksAway - (weeksAway % rule.interval) - rule.interval', 'weeksAway - rule.interval'],
   ['MONTHLY: skips ahead off the INTERVAL grid', 'src/main/ics/rrule.js',
     'start.mo - 1 + monthsAway - (monthsAway % rule.interval)', 'start.mo - 1 + monthsAway'],
 
-  // UNTIL is inclusive, in its datetime and its date form.
+  // An instance can fall more than a day from its date's local midnight, so a
+  // jump-start lands short of the window and a loop stops past it.
+  ['slack: none', 'src/main/ics/rrule.js', 'const SLACK_MS = 2 * DAY_MS;', 'const SLACK_MS = 0;'],
+  ['DAILY: skips ahead to the window itself', 'src/main/ics/rrule.js',
+    '(windowStart - SLACK_MS - cursor.getTime())', '(windowStart - cursor.getTime())'],
+  ['MONTHLY: skips ahead to the window month itself', 'src/main/ics/rrule.js',
+    '(w.getMonth() + 1 - start.mo) - 1;', '(w.getMonth() + 1 - start.mo);'],
+
+  // UNTIL is inclusive, in its UTC, floating and date forms.
   ['UNTIL: datetime form exclusive', 'src/main/ics/rrule.js', 'return ms > rule.until.ms;', 'return ms >= rule.until.ms;'],
   ['UNTIL: date form exclusive', 'src/main/ics/rrule.js', 'return d > u.d;', 'return d >= u.d;'],
   ['UNTIL: date form ignored', 'src/main/ics/rrule.js', 'if (/^\\d{8}$/.test(value)) {', 'if (false) {'],
+  ['UNTIL: floating form read as UTC', 'src/main/ics/rrule.js',
+    'rule.until = m[7] ? { ms: Date.UTC(y, mo - 1, d, h, mi, s) } : { wall: [y, mo, d, h, mi, s] };',
+    'rule.until = { ms: Date.UTC(y, mo - 1, d, h, mi, s) };'],
 
   // The RRULE engine: DAILY, WEEKLY with BYDAY, MONTHLY with BYMONTHDAY or
   // BYDAY, and YEARLY with BYMONTH plus either.
   ['engine: no DAILY', 'src/main/ics/rrule.js', "if (rule.freq === 'DAILY') {", "if (rule.freq === 'NONE') {"],
   ['engine: no MONTHLY', 'src/main/ics/rrule.js', "if (rule.freq === 'MONTHLY') {", "if (rule.freq === 'NONE') {"],
   ['engine: no YEARLY', 'src/main/ics/rrule.js', "if (rule.freq === 'YEARLY') {", "if (rule.freq === 'NONE') {"],
-  ['engine: INTERVAL ignored', 'src/main/ics/rrule.js', 'rule.interval = Math.max(1, parseInt(value, 10) || 1);', ''],
+  ['engine: INTERVAL ignored', 'src/main/ics/rrule.js', 'rule.interval = /^\\d+$/.test(value) ? +value : 0;', ''],
   ['WEEKLY: INTERVAL ignored', 'src/main/ics/rrule.js', 'weekIndex += rule.interval;', 'weekIndex += 1;'],
   ['nonexistent dates rolled over', 'src/main/ics/rrule.js',
     '.filter((d) => d >= 1 && d <= last)', '.filter((d) => d >= 1)'],
   ['BYMONTHDAY: negative days not counted from the end', 'src/main/ics/rrule.js',
-    '(n > 0 ? n : last + 1 + n)', 'n'],
+    'return n > 0 ? n : last + 1 + n;', 'return n;'],
   ['BYDAY: ignored outside WEEKLY', 'src/main/ics/rrule.js',
-    '} else if (rule.byDayNth.length) {', '} else if (false) {'],
+    '} else if (rule.byDay.length) {', '} else if (false) {'],
   ['BYDAY: ordinal ignored', 'src/main/ics/rrule.js',
     'if (n === 0) days.push(...dates);', 'if (true) days.push(...dates);'],
   ['BYDAY: negative ordinal counted from the start', 'src/main/ics/rrule.js',
@@ -135,16 +183,53 @@ const MUTATIONS = [
   ['YEARLY: only the first BYMONTH', 'src/main/ics/rrule.js',
     'const months = rule.byMonth.length ? rule.byMonth : [start.mo];', 'const months = [rule.byMonth[0] || start.mo];'],
 
-  // A rule with a part the engine doesn't implement shows only DTSTART.
+  // Weeks start on WKST, Monday by default.
+  ['WKST: weeks start on Sunday', 'src/main/ics/rrule.js', 'const wkst = DAY_CODES[rule.wkst];', 'const wkst = 0;'],
+  ['WKST: ignored', 'src/main/ics/rrule.js', 'rule.wkst = value.toUpperCase();', ''],
+  ['WKST: Sunday by default', 'src/main/ics/rrule.js', "wkst: 'MO',", "wkst: 'SU',"],
+
+  // A series' dates come in order and once each, since COUNT and the end of
+  // the window stop it at the first date past them.
+  ['order: days of the month unsorted', 'src/main/ics/rrule.js',
+    '.filter((d) => d >= 1 && d <= last).sort((a, b) => a - b);', '.filter((d) => d >= 1 && d <= last);'],
+  ['order: days of the month repeated', 'src/main/ics/rrule.js',
+    'return [...new Set(days)].filter(', 'return days.filter('],
+  ['order: BYMONTH unsorted', 'src/main/ics/rrule.js',
+    "rule.byMonth = [...new Set(value.split(',').map(Number))].sort((a, b) => a - b);",
+    "rule.byMonth = [...new Set(value.split(',').map(Number))];"],
+  ['order: BYMONTH repeated', 'src/main/ics/rrule.js',
+    "rule.byMonth = [...new Set(value.split(',').map(Number))].sort((a, b) => a - b);",
+    "rule.byMonth = value.split(',').map(Number).sort((a, b) => a - b);"],
+  ['order: WEEKLY days unsorted', 'src/main/ics/rrule.js',
+    '.map((dow) => (dow - wkst + 7) % 7).sort((a, b) => a - b);', '.map((dow) => (dow - wkst + 7) % 7);'],
+  ['order: WEEKLY days repeated', 'src/main/ics/rrule.js',
+    '[...new Set(rule.byDay.map((x) => x.dow))]', 'rule.byDay.map((x) => x.dow)'],
+
+  // Where RFC 5545 makes a part a limit, it keeps only the dates it names, and
+  // the dates it drops don't count toward COUNT.
+  ['limits: BYMONTH ignored', 'src/main/ics/rrule.js',
+    'if (rule.byMonth.length && !rule.byMonth.includes(mo)) return false;', ''],
+  ['limits: BYMONTHDAY ignored', 'src/main/ics/rrule.js',
+    'if (rule.byMonthDay.length && !rule.byMonthDay.some((n) => monthDay(n, daysIn(y, mo)) === d)) return false;', ''],
+  ['limits: BYDAY ignored', 'src/main/ics/rrule.js',
+    'if (rule.byDay.length && !rule.byDay.some((x) => x.dow === weekday(y, mo, d))) return false;', ''],
+  ['limits: dropped dates counted', 'src/main/ics/rrule.js',
+    'if (ms <= start.ms || !inLimits(rule, y, mo, d)) return true;\n    emitted++;',
+    'if (ms <= start.ms) return true;\n    emitted++;\n    if (!inLimits(rule, y, mo, d)) return true;'],
+
+  // A rule with a part, a value or a combination the engine doesn't implement
+  // shows only DTSTART.
   ['unsupported: rule expanded anyway', 'src/main/ics/rrule.js',
-    'if (!rule || !supported(rule)) {', 'if (!rule) {'],
+    'if (!rule || !supported(rule)) return out;', 'if (!rule) return out;'],
   ['unsupported: unknown rule part accepted', 'src/main/ics/rrule.js',
     '// BYSETPOS, BYWEEKNO, BYYEARDAY, BYHOUR and the rest.\n        rule.unsupported = true;',
     '// BYSETPOS, BYWEEKNO, BYYEARDAY, BYHOUR and the rest.'],
-  ['unsupported: WKST ignored', 'src/main/ics/rrule.js',
-    ' && !(rule.interval > 1 && rule.byDay.some((d) => d < DAY_CODES[rule.wkst]))', ''],
+  ['unsupported: unreadable INTERVAL accepted', 'src/main/ics/rrule.js',
+    'if (rule.interval < 1) rule.unsupported = true;', ''],
   ['unsupported: unreadable COUNT accepted', 'src/main/ics/rrule.js',
     'if (rule.count === null || rule.count < 0) rule.unsupported = true;', ''],
+  ['unsupported: unknown WKST accepted', 'src/main/ics/rrule.js',
+    'if (!Object.hasOwn(DAY_CODES, rule.wkst)) rule.unsupported = true;', ''],
   ['unsupported: unreadable UNTIL accepted', 'src/main/ics/rrule.js',
     'rule.unsupported = true; // an unreadable UNTIL would make the series endless', ''],
   ['unsupported: impossible BYMONTH accepted', 'src/main/ics/rrule.js',
@@ -152,7 +237,23 @@ const MUTATIONS = [
   ['unsupported: impossible BYMONTHDAY accepted', 'src/main/ics/rrule.js',
     'if (!rule.byMonthDay.every((d) => Number.isInteger(d) && d !== 0 && d >= -31 && d <= 31)) rule.unsupported = true;', ''],
   ['unsupported: unreadable BYDAY skipped', 'src/main/ics/rrule.js',
-    'if (!m) {\n            rule.unsupported = true;\n            continue;\n          }', 'if (!m) continue;'],
+    'if (!m || (m[1] !== undefined && +m[1] === 0)) {\n            rule.unsupported = true;\n            continue;\n          }',
+    'if (!m) continue;\n          if (+m[1] === 0) {\n            rule.unsupported = true;\n            continue;\n          }'],
+  ['unsupported: 0 ordinal accepted', 'src/main/ics/rrule.js',
+    'if (!m || (m[1] !== undefined && +m[1] === 0)) {', 'if (!m) {'],
+  ['unsupported: ordinal on DAILY accepted', 'src/main/ics/rrule.js', 'return !ordinal;', 'return true;'],
+  ['unsupported: ordinal on WEEKLY accepted', 'src/main/ics/rrule.js',
+    'return !ordinal && !byMonthDay;', 'return !byMonthDay;'],
+  ['unsupported: BYMONTHDAY on WEEKLY accepted', 'src/main/ics/rrule.js',
+    'return !ordinal && !byMonthDay;', 'return !ordinal;'],
+  ['unsupported: MONTHLY BYDAY with BYMONTHDAY accepted', 'src/main/ics/rrule.js',
+    'return !(byDay && byMonthDay);', 'return true;'],
+  ['unsupported: YEARLY BYDAY with BYMONTHDAY accepted', 'src/main/ics/rrule.js',
+    'return !(byDay && byMonthDay) && (byMonth', 'return (byMonth'],
+  ['unsupported: YEARLY BYDAY or BYMONTHDAY without BYMONTH accepted', 'src/main/ics/rrule.js',
+    ' && (byMonth || (!byDay && !byMonthDay));', ';'],
+  ['unsupported: sub-daily frequency accepted', 'src/main/ics/rrule.js',
+    'return false; // HOURLY, MINUTELY, SECONDLY', 'return true;'],
 
   // Block nesting and DTEND fallbacks.
   ['VALARM: properties collected at any depth', 'src/main/ics/vevent.js',

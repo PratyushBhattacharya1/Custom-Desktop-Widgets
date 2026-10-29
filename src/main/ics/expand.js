@@ -9,17 +9,49 @@
 // event is an all-day master carrying a *timed* RECURRENCE-ID, which exact
 // datetime equality would never match.
 const { expandRRule } = require('./rrule');
-const { localDateKey } = require('./datetime');
+const { localDateKey, daysBetween } = require('./datetime');
+
+// An all-day instance lasts as many calendar days as its event, counted from
+// the instance's own local midnight. Adding the event's length in ms instead
+// ends an instance at 01:00 the next day when it falls on a 23-hour DST day,
+// and the widget then shows it on that day too.
+function instanceEnd(event, startMs) {
+  if (event.allDay && event.end.allDay) {
+    const s = new Date(startMs);
+    const days = Math.max(0, daysBetween(event.start, event.end));
+    return new Date(s.getFullYear(), s.getMonth(), s.getDate() + days).getTime();
+  }
+  return startMs + Math.max(0, event.end.ms - event.start.ms);
+}
+
+// The earliest an instance of `event` can start and still reach windowStart:
+// the event's length before it. A fixed margin misses longer instances. With a
+// day, a Thursday-to-Saturday series never produces the instance that covers
+// Saturday the 1st. The length is in ms even for an all-day event, whose
+// instances instanceEnd() measures in calendar days. Across a DST change the
+// two differ by an hour. With a window that starts at local midnight, as a
+// month does, that hour only decides whether an instance that ends exactly at
+// windowStart is produced, and no day of the window shows that one.
+function earliestStart(event, windowStart) {
+  return windowStart - Math.max(0, event.end.ms - event.start.ms);
+}
+
+// Whether an instance belongs in the window: it starts inside it, or starts
+// before and runs into it. An end is exclusive, so an instance that ends at
+// 00:00 on the 1st isn't in that month, but one with no length that starts at
+// windowStart is.
+function overlaps(startMs, endMs, windowStart, windowEnd) {
+  return startMs <= windowEnd && (startMs >= windowStart || endMs > windowStart);
+}
 
 function instanceFrom(event, startMs) {
-  const duration = Math.max(0, event.end.ms - event.start.ms);
   return {
     uid: event.uid,
     summary: event.summary,
     location: event.location,
     allDay: event.allDay,
     startMs,
-    endMs: startMs + duration,
+    endMs: instanceEnd(event, startMs),
   };
 }
 
@@ -46,7 +78,7 @@ function expandEvents(events, windowStart, windowEnd) {
   for (const master of masters) {
     if (!master.rrule) {
       // Plain one-off event: include if it overlaps the window at all.
-      if (master.end.ms >= windowStart && master.start.ms <= windowEnd) {
+      if (overlaps(master.start.ms, master.end.ms, windowStart, windowEnd)) {
         out.push(instanceFrom(master, master.start.ms));
       }
       continue;
@@ -54,13 +86,15 @@ function expandEvents(events, windowStart, windowEnd) {
 
     const exdateKeys = new Set(master.exdates.map((d) => localDateKey(d.ms)));
 
-    // Widen the expansion window by a day so an instance that starts just
-    // before the window but runs into it is still produced.
+    // Start early enough to produce an instance that starts before the window
+    // but runs into it. The overlap test below still drops one that ends
+    // before the window. Nothing that starts after the window can overlap it,
+    // and an override moved into the window from there is picked up below.
     const occurrences = expandRRule(
       master.rrule,
       master.start,
-      windowStart - 86400000,
-      windowEnd + 86400000
+      earliestStart(master, windowStart),
+      windowEnd
     );
 
     for (const ms of occurrences) {
@@ -72,14 +106,14 @@ function expandEvents(events, windowStart, windowEnd) {
 
       if (override) {
         consumed.add(overrideKey);
-        if (override.end.ms >= windowStart && override.start.ms <= windowEnd) {
+        if (overlaps(override.start.ms, override.end.ms, windowStart, windowEnd)) {
           out.push(instanceFrom(override, override.start.ms));
         }
         continue;
       }
 
       const inst = instanceFrom(master, ms);
-      if (inst.endMs >= windowStart && inst.startMs <= windowEnd) out.push(inst);
+      if (overlaps(inst.startMs, inst.endMs, windowStart, windowEnd)) out.push(inst);
     }
   }
 
@@ -87,7 +121,7 @@ function expandEvents(events, windowStart, windowEnd) {
   // case no base occurrence was generated to swap it into. Pick those up here.
   for (const [key, ov] of overrideIndex) {
     if (consumed.has(key)) continue;
-    if (ov.end.ms >= windowStart && ov.start.ms <= windowEnd) {
+    if (overlaps(ov.start.ms, ov.end.ms, windowStart, windowEnd)) {
       out.push(instanceFrom(ov, ov.start.ms));
     }
   }

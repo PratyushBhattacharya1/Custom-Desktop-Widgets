@@ -17,7 +17,7 @@ const { unfold } = require('../src/main/ics/unfold');
 const { parseLine } = require('../src/main/ics/contentline');
 const { parseCalendar } = require('../src/main/ics/vevent');
 const { expandEvents } = require('../src/main/ics/expand');
-const { isSupported } = require('../src/main/ics/rrule');
+const { expandRRule, isSupported } = require('../src/main/ics/rrule');
 const { localDateKey } = require('../src/main/ics/datetime');
 const { readEntries } = require('./read-zip');
 
@@ -130,7 +130,7 @@ function verifyFixture() {
   // ---------------------------------------------------------------- parsing
   // VTIMEZONE's DAYLIGHT and STANDARD blocks carry DTSTART and RRULE, and the
   // VALARM carries its own SUMMARY. None of them may become or change an event.
-  ok('parses exactly the 27 events', events.length === 27, events.length + ' parsed');
+  ok('parses exactly the 49 events', events.length === 49, events.length + ' parsed');
   const standup = event('weekly-dst');
   ok('VALARM properties do not leak into their event', standup !== null && standup.summary === 'Standup',
      standup && JSON.stringify(standup.summary));
@@ -170,6 +170,13 @@ function verifyFixture() {
   same('MONTHLY keeps 18:00 Berlin across the EU DST change', starts('monthly-dst', months(2025, 1, 6)), [
     '2025-01-15T17:00Z', '2025-02-15T17:00Z', '2025-03-15T17:00Z', '2025-04-15T16:00Z', '2025-05-15T16:00Z',
   ]);
+  // With no BYDAY, WEEKLY repeats on DTSTART's weekday in DTSTART's own zone.
+  // 08:00 on a Monday in Tokyo is still Sunday in New York, so reading the
+  // weekday there moves the series to Tokyo Sundays and drops its first
+  // instance.
+  same('WEEKLY without BYDAY keeps the weekday of its own zone', starts('weekly-tokyo', months(2025, 3, 3)), [
+    '2025-03-02T23:00Z', '2025-03-09T23:00Z', '2025-03-16T23:00Z',
+  ]);
 
   // -------------------------------------------------------- COUNT and UNTIL
   // COUNT counts from DTSTART. A rule that skips ahead to the requested window
@@ -186,6 +193,22 @@ function verifyFixture() {
        ['2021-07-04', '2022-07-04', '']);
   same('YEARLY with neither COUNT nor UNTIL reaches a far-future window',
        days('yearly-forever', months(2030, 2, 2)), ['2030-02-20']);
+  // A DAILY rule with no limits skips ahead even with a COUNT, and counts the
+  // instances it skips. A COUNT longer than MAX_INSTANCES still reaches its
+  // end: the cap is on the window's instances, not on those since DTSTART.
+  const longCount = starts('daily-long-count', months(2028, 3, 3));
+  same('DAILY COUNT=3000 ends on its 3000th day, years after DTSTART',
+       [longCount.length, longCount[0], longCount.pop()], [18, '2028-03-01T08:00Z', '2028-03-18T08:00Z']);
+  // A DAILY rule with BYDAY can't count what it would skip, so it walks: the
+  // weekends it passes on the way don't count toward COUNT.
+  same('DAILY BYDAY COUNT counts only the days it keeps', starts('daily-weekdays', months(2025, 2, 2)), [
+    '2025-02-03T07:00Z', '2025-02-04T07:00Z', '2025-02-05T07:00Z', '2025-02-06T07:00Z', '2025-02-07T07:00Z',
+  ]);
+  // DTSTART is always the first instance and counts toward COUNT, even when
+  // it isn't one of the rule's own dates.
+  same('a DTSTART off the rule is its first instance', starts('monthly-off-rule', months(2025, 1, 3)), [
+    '2025-01-10T08:00Z', '2025-01-15T08:00Z', '2025-02-15T08:00Z',
+  ]);
 
   // UNTIL is inclusive in both forms: 07:00Z on 16 April is exactly the last
   // standup, and the plants get watered on the UNTIL date itself.
@@ -194,13 +217,18 @@ function verifyFixture() {
   same('DAILY INTERVAL=2 stops on its date-only UNTIL', days('daily-until-date', months(2025, 6, 6)), [
     '2025-06-10', '2025-06-12', '2025-06-14', '2025-06-16',
   ]);
+  // An UNTIL without Z is a wall-clock time, read in DTSTART's frame. Read as
+  // UTC, 09:00 on 5 June is 05:00 in New York, before that day's 09:00 instance.
+  same('a floating UNTIL keeps the instance that falls on it', starts('daily-floating-until', months(2025, 6, 6)), [
+    '2025-06-01T13:00Z', '2025-06-02T13:00Z', '2025-06-03T13:00Z', '2025-06-04T13:00Z', '2025-06-05T13:00Z',
+  ]);
 
   // ------------------------------------------------- skipping to the window
   // A rule without COUNT skips ahead to the requested window a whole number of
-  // intervals at a time, so it must land on the series' own dates there. A
-  // daily series that began years ago must not run out of instances on the
-  // way, as it did when DAILY walked from DTSTART into MAX_INSTANCES.
-  same('DAILY INTERVAL=2 from 2010 reaches 2030 on its own days', starts('daily-forever', months(2030, 2, 2)), [
+  // intervals at a time, so it must land on the series' own dates there. The
+  // daily series began in 1900, so walking from DTSTART instead would run out
+  // of MAX_ITERATIONS before 2030.
+  same('DAILY INTERVAL=2 from 1900 reaches 2030 on its own days', starts('daily-forever', months(2030, 2, 2)), [
     '2030-02-01T06:00Z', '2030-02-03T06:00Z', '2030-02-05T06:00Z', '2030-02-07T06:00Z', '2030-02-09T06:00Z',
     '2030-02-11T06:00Z', '2030-02-13T06:00Z', '2030-02-15T06:00Z', '2030-02-17T06:00Z', '2030-02-19T06:00Z',
     '2030-02-21T06:00Z', '2030-02-23T06:00Z', '2030-02-25T06:00Z', '2030-02-27T06:00Z',
@@ -213,6 +241,26 @@ function verifyFixture() {
   ]);
   same('MONTHLY INTERVAL=2 keeps to its own months in a far-future window',
        starts('monthly-second-tuesday', months(2030, 10, 11)), ['2030-11-12T16:00Z']);
+
+  // The engine steps local dates, but an instance can fall more than a day
+  // from its date's local midnight. 23:00 in Honolulu is 04:00 the next day in
+  // New York, and midnight in Kiritimati is 05:00 the day before. A jump-start
+  // must land far enough short of the window, and a loop must stop far enough
+  // past it, to catch those. expandEvents passes the end of the window to the
+  // engine as it is, so the month view relies on the engine's own stop. It
+  // starts the engine early by the event's length, which can hide a near miss
+  // at the start, so these call the engine with the exact window.
+  const exact = (name, win) => {
+    const ev = event(name);
+    return ev ? expandRRule(ev.rrule, ev.start, win[0], win[1]).map(iso) : [];
+  };
+  const lateDaily = exact('daily-honolulu-late', months(2025, 2, 2));
+  same('DAILY skips ahead short enough to keep a date that lands in the window the next day',
+       [lateDaily.length, lateDaily[0]], [28, '2025-02-01T09:00Z']);
+  same('MONTHLY skips ahead short enough to keep a month-end that lands in the window',
+       exact('monthly-honolulu-last', months(2025, 2, 2)), ['2025-02-01T09:00Z']);
+  same('MONTHLY looks far enough past the window for a month-start that lands in it',
+       exact('monthly-kiritimati-first', months(2025, 1, 1)), ['2025-01-31T10:00Z']);
 
   // ------------------------------------------------------ nonexistent dates
   // A date the month or year doesn't have is skipped, not rolled into the next
@@ -242,16 +290,61 @@ function verifyFixture() {
        [2025, 2030].map((y) => days('yearly-thanksgiving', months(y, 11, 11)).join()), ['2025-11-27', '2030-11-28']);
   same('YEARLY takes each of its BYMONTH months', days('yearly-two-months', months(2026, 1, 12)), ['2026-03-01', '2026-09-01']);
 
+  // The engine takes a series' dates in order and once each, since COUNT and
+  // the end of the window both stop it at the first date past them. These
+  // rules list their parts out of order and twice.
+  same('WEEKLY takes BYDAY in week order, once each', starts('weekly-unordered', months(2025, 1, 1)), [
+    '2025-01-09T09:00Z', '2025-01-14T09:00Z', '2025-01-16T09:00Z', '2025-01-21T09:00Z',
+  ]);
+  same('MONTHLY takes its days in date order', starts('monthly-unordered', months(2025, 1, 6)), [
+    '2025-01-31T15:00Z', '2025-02-03T15:00Z', '2025-02-28T15:00Z', '2025-03-03T15:00Z',
+  ]);
+  same('YEARLY takes BYMONTH and BYMONTHDAY in order, once each',
+       [2025, 2026].map((y) => days('yearly-unordered', months(y, 1, 12)).join()),
+       ['2025-03-01,2025-09-01', '2026-03-01']);
+
+  // ------------------------------------------------------------------ limits
+  // Where RFC 5545 makes a part a limit, it keeps only the dates it names, and
+  // the dates it drops don't count toward COUNT.
+  same('DAILY BYDAY=MO,TU,WE,TH,FR keeps to weekdays', starts('daily-weekdays', months(2025, 1, 1)), [
+    '2025-01-20T07:00Z', '2025-01-21T07:00Z', '2025-01-22T07:00Z', '2025-01-23T07:00Z', '2025-01-24T07:00Z',
+    '2025-01-27T07:00Z', '2025-01-28T07:00Z', '2025-01-29T07:00Z', '2025-01-30T07:00Z', '2025-01-31T07:00Z',
+  ]);
+  same('DAILY BYMONTH and BYMONTHDAY keep to the days both name',
+       [2025, 2030].map((y) => days('daily-limits', months(y, 1, 12)).join()),
+       ['2025-03-01,2025-03-31', '2030-03-01,2030-03-31']);
+  same('WEEKLY BYMONTH keeps to its month and counts only its days',
+       [2025, 2026].map((y) => days('weekly-june', months(y, 1, 12)).join()),
+       ['2025-06-02,2025-06-09,2025-06-16,2025-06-23,2025-06-30', '2026-06-01']);
+  same('MONTHLY BYMONTH keeps to its months', days('monthly-jan-jul', months(2025, 1, 12)), ['2025-01-14', '2025-07-08']);
+
+  // -------------------------------------------------------------------- WKST
+  // Weeks start on WKST, Monday by default, which decides the fortnight a day
+  // falls in: from Monday 6 January, the Sunday of a Monday week is the 12th,
+  // and the Sunday of a Sunday week is the 5th, before DTSTART.
+  same('a fortnightly rule keeps a Sunday in its Monday week by default',
+       starts('weekly-wkst-default', months(2025, 1, 1)),
+       ['2025-01-06T08:00Z', '2025-01-12T08:00Z', '2025-01-20T08:00Z', '2025-01-26T08:00Z']);
+  same('a fortnightly rule with WKST=SU starts each week on Sunday',
+       starts('weekly-wkst-sunday', months(2025, 1, 1)), ['2025-01-06T08:00Z', '2025-01-19T08:00Z', '2025-01-20T08:00Z']);
+
   // A rule part the engine doesn't implement would put instances on wrong
   // dates if it were ignored, so the series shows its DTSTART alone.
   same('a rule with BYSETPOS shows only DTSTART', starts('unsupported-setpos', months(2025, 2, 4)), ['2025-02-11T08:00Z']);
-  same('a fortnightly rule with WKST=MO and a Sunday shows only DTSTART',
-       starts('unsupported-wkst', months(2025, 1, 1)), ['2025-01-06T08:00Z']);
-  // An unreadable COUNT or UNTIL would make the series endless, and a month or
-  // day of the month that can't exist would put it on wrong dates.
+  // An unreadable COUNT or UNTIL would make the series endless, and an
+  // unreadable INTERVAL, a month or day of the month that can't exist, a zero
+  // ordinal or an unknown WKST would put it on wrong dates.
   same('a malformed rule is not expanded',
-       ['FREQ=DAILY;COUNT=ten', 'FREQ=DAILY;UNTIL=2025-06-01', 'FREQ=YEARLY;BYMONTH=13',
-        'FREQ=MONTHLY;BYMONTHDAY=0', 'FREQ=WEEKLY;BYDAY=MONDAY', 'FREQ=HOURLY', 'COUNT=3'].filter(isSupported), []);
+       ['FREQ=DAILY;COUNT=ten', 'FREQ=DAILY;UNTIL=2025-06-01', 'FREQ=WEEKLY;INTERVAL=two;BYDAY=MO',
+        'FREQ=YEARLY;BYMONTH=13', 'FREQ=MONTHLY;BYMONTHDAY=0', 'FREQ=WEEKLY;BYDAY=MONDAY',
+        'FREQ=MONTHLY;BYDAY=0MO', 'FREQ=WEEKLY;WKST=XX;BYDAY=MO', 'FREQ=HOURLY', 'COUNT=3'].filter(isSupported), []);
+  // Each of these combinations means something the engine doesn't do: an
+  // ordinal outside MONTHLY and YEARLY, BYMONTHDAY on WEEKLY, dates that BYDAY
+  // and BYMONTHDAY both pick, and YEARLY BYDAY or BYMONTHDAY with no BYMONTH.
+  same('a combination the engine does not implement is not expanded',
+       ['FREQ=DAILY;BYDAY=1MO', 'FREQ=WEEKLY;BYDAY=1MO', 'FREQ=WEEKLY;BYMONTHDAY=1',
+        'FREQ=MONTHLY;BYDAY=FR;BYMONTHDAY=13', 'FREQ=YEARLY;BYMONTH=6;BYDAY=FR;BYMONTHDAY=13',
+        'FREQ=YEARLY;BYDAY=20MO', 'FREQ=YEARLY;BYMONTHDAY=1'].filter(isSupported), []);
 
   // ---------------------------------------------- EXDATE and RECURRENCE-ID
   // Both match an instance by local calendar day, not by exact instant. The
@@ -284,10 +377,50 @@ function verifyFixture() {
   // All-day dates anchor to local midnight, and DTEND is exclusive: the long
   // weekend runs Saturday to Monday, across New York's 23-hour DST Sunday.
   const allDay = expandEvents(events, ...months(2025, 1, 12)).filter((i) => i.allDay);
+  const atMidnight = (ms) => new Date(ms).getHours() === 0 && new Date(ms).getMinutes() === 0;
   ok('all-day instances start at local midnight',
-     allDay.length > 0 && allDay.every((i) => new Date(i.startMs).getHours() === 0 && new Date(i.startMs).getMinutes() === 0),
+     allDay.length > 0 && allDay.every((i) => atMidnight(i.startMs)),
      allDay.length + ' checked');
+  // They end at one too, a whole number of days later. A DST change makes a
+  // day 23 or 25 hours long, so an end computed in milliseconds lands at
+  // 01:00 or 23:00 instead.
+  const offMidnight = allDay.filter((i) => !atMidnight(i.endMs)).map((i) => i.uid.split('@')[0] + ' ' + iso(i.endMs));
+  ok('all-day instances end at local midnight', offMidnight.length === 0,
+     offMidnight.length ? 'ending ' + offMidnight.join(', ') : allDay.length + ' checked');
   same('an all-day DTEND is exclusive', days('allday-span', months(2025, 3, 3)), ['2025-03-08+2025-03-09+2025-03-10']);
+  // Each instance of an all-day series lasts as many days as its master. The
+  // master's day has 24 hours and 9 March, New York's spring-forward Sunday,
+  // has 23, so 24 hours from that midnight is 01:00 on Monday.
+  same('a recurring all-day instance keeps to its day across DST', days('allday-sunday', months(2025, 3, 3)), [
+    '2025-03-02', '2025-03-09', '2025-03-16',
+  ]);
+  // With no DTEND, an all-day event lasts one day, and the days of an all-day
+  // DURATION are calendar days (RFC 5545 3.3.6). Both cross the same Sunday.
+  same('an all-day event with no DTEND lasts one day', days('allday-no-end', months(2025, 3, 3)), ['2025-03-09']);
+  same('an all-day DURATION counts calendar days', days('allday-duration', months(2025, 3, 3)), ['2025-03-08+2025-03-09']);
+
+  // ------------------------------------------ instances that run into a month
+  // A month shows every instance that overlaps it, however early it starts.
+  // The book fair's 30 January instance runs Thursday to Saturday, 1 February,
+  // and the on-call weekend of 29 August runs to 08:00 on Monday, 1 September.
+  // Both start more than a day before the month they run into. The book fair
+  // has a COUNT, so its expansion walks from DTSTART. The on-call weekend has
+  // none and began in 2023, so its expansion jump-starts over two years of
+  // weeks and must still land before the instance that runs into the month.
+  same('an all-day instance that starts days before the month shows in it',
+       days('allday-multiday-weekly', months(2025, 2, 2)),
+       ['2025-01-30+2025-01-31+2025-02-01', '2025-02-06+2025-02-07+2025-02-08']);
+  same('a timed instance that starts days before the month shows in it',
+       starts('timed-multiday-weekly', months(2025, 9, 9)),
+       ['2025-08-29T22:00Z', '2025-09-05T22:00Z', '2025-09-12T22:00Z']);
+  // An end is exclusive. The weekend shift of 29 August ends at 00:00 on
+  // Monday, 1 September, so it isn't in September. The meter reading has no
+  // length and starts at that midnight, so it is.
+  same('an instance that ends as the month starts is not in it',
+       starts('timed-ends-at-midnight', months(2025, 9, 9)), ['2025-09-05T22:00Z']);
+  same('an instance with no length at the start of the month is in it',
+       [starts('zero-length-midnight', months(2025, 8, 8)), starts('zero-length-midnight', months(2025, 9, 9))],
+       [[], ['2025-09-01T04:00Z']]);
 }
 
 // The export suite checks the parser as the widget runs on this machine, so it
