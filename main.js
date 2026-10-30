@@ -93,6 +93,10 @@ function createWidget(widget) {
   win.on('move', replace);
   win.on('resize', replace);
 
+  // A renderer that crashes mid-drag on the calendar's events list can't send
+  // the size request that ends the hold keeping its window stretched.
+  win.webContents.on('render-process-gone', () => ipc.endResize(win));
+
   windows[widget.id] = win;
 }
 

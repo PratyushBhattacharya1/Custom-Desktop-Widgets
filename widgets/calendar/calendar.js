@@ -41,7 +41,7 @@
     today: start,
     month: null,          // { instances, calendars, status } for the cursor month
     maxWidgetHeight: 460, // replaced by the real work-area budget at init
-    workAreaHeight: 1000, // also replaced at init: the most a list sized by hand gets
+    roomBelow: 460,       // also replaced at init: from the widget's top to the work area's bottom
     listHeight: null,     // the most the events list grows to once dragged; null uses the budget
   };
 
@@ -194,15 +194,19 @@
     el.eventsScroll.style.height = '';
     el.eventsScroll.style.maxHeight = '';
     // A refresh or midnight can empty the day mid-drag. With no list left to
-    // size, the drag ends: losing capture runs endDrag.
-    if (grab && el.grip.hasPointerCapture(grab.pointerId)) {
-      el.grip.releasePointerCapture(grab.pointerId);
-    }
+    // size, the drag ends, and since it was never dropped it saves nothing.
+    if (grab) finishDrag(false);
     syncHeight();
   }
 
   function renderEvents() {
     const scroll = el.eventsScroll;
+    // The ease-back after a drag outranks the inline heights, so the new list
+    // would show at the old one's height until it ended. Land it first.
+    if (settling) {
+      settling.cancel();
+      settling = null;
+    }
     scroll.textContent = '';
 
     // No selection, or nothing on that day, means the panel collapses away. So
@@ -254,8 +258,9 @@
   // Sizes the scroll area. The list fits its events up to a limit, then
   // scrolls. The limit keeps the whole widget within its height budget, or,
   // once the user has dragged the grip, it's the height they dropped it at, as
-  // far as the work area allows. Mid-drag, the list takes the drag's height
-  // exactly, even past its last event.
+  // far as the room below the widget's top allows (or the budget, if that's
+  // more): main caps the window the same way. Mid-drag, the list takes the
+  // drag's height exactly, even past its last event.
   function applyListHeight() {
     const scroll = el.eventsScroll;
     const top = scroll.scrollTop; // measuring at full length clamps it to 0
@@ -267,8 +272,8 @@
     if (grab && grab.moved) {
       scroll.style.height = grab.height + 'px';
     } else if (state.listHeight !== null) {
-      const room = Math.max(LIST_MIN, Math.round(state.workAreaHeight - chrome));
-      scroll.style.maxHeight = Math.min(state.listHeight, room) + 'px';
+      const room = Math.max(LIST_MIN, Math.round(Math.max(state.maxWidgetHeight, state.roomBelow) - chrome));
+      scroll.style.maxHeight = Math.min(Math.max(LIST_MIN, state.listHeight), room) + 'px';
     } else {
       const budget = state.maxWidgetHeight - chrome;
       scroll.style.maxHeight = Math.max(LIST_MIN, Math.round(budget)) + 'px';
@@ -417,17 +422,11 @@
     loadMonth();
   }
 
-  // The month label can close the picker without a month being picked, which
-  // shows the cursor month straight away. So a year step is a move like any
-  // other: it clears the selection and loads the month it moved to, or the grid
-  // would show the old month's events.
   function stepYear(delta) {
     const y = state.cursor.y + delta;
     if (y < MIN_YEAR || y > MAX_YEAR) return;
     state.cursor = { y: y, m: state.cursor.m };
-    state.selected = null;
     render();
-    loadMonth();
   }
 
   function goToToday() {
@@ -447,9 +446,21 @@
     loadMonth();
   }
 
+  // The year the picker opened on. The label can close the picker without a
+  // month being picked, which shows the cursor month straight away. Back on a
+  // different year, that's a move like any other: it clears the selection and
+  // loads the month, or the grid would show the old month's events. Loading
+  // here rather than on every year step costs one request, not one per step.
+  let pickerYear = null;
+
   el.label.addEventListener('click', function () {
-    state.view = state.view === 'days' ? 'months' : 'days';
+    const opening = state.view === 'days';
+    state.view = opening ? 'months' : 'days';
+    if (opening) pickerYear = state.cursor.y;
+    const moved = !opening && state.cursor.y !== pickerYear;
+    if (moved) state.selected = null;
     render();
+    if (moved) loadMonth();
   });
   // Delegated: #grid is only ever emptied, never replaced, so one listener here
   // outlives every render and saves rebinding 31 closures each time.
@@ -486,20 +497,24 @@
   // list eases back to fit its events before the window refits around the card:
   // the ease-back is what tells the user the height is a limit. A press that
   // never moves is a click and changes nothing, so a double-click, which puts
-  // the list back on its budget, never stretches the window.
+  // the list back on its budget, never stretches the window. On a day whose
+  // events fit under the limit, the limit isn't on screen, so a drag there only
+  // raises it: brushing the grip on a light day can't wipe out a limit set on a
+  // busy one. A drag cut short (the panel empties, the pointer or the focus goes
+  // elsewhere) was never dropped, so it saves nothing.
   const DRAG_SLOP = 3; // px a press can wander and still be a click
   const EASE_MS = 180;
 
-  // { pointerId, startY, startHeight, chrome, maxHeight, moved, height }
+  // { pointerId, startY, startHeight, chrome, maxHeight, limit, fits, moved, height }
   let grab = null;
   let settling = null; // the ease-back animation while it runs
 
   // Eases the list from the dropped height down to its events, if they're
   // shorter, and resolves once it's there. element.animate() rather than a CSS
-  // transition: applyListHeight() rewrites the inline height to measure, and an
-  // animation sits over the inline styles, so a re-render mid-ease can't strand
-  // it. It also sits outside widget.css's reduced-motion override, so it checks
-  // the setting itself and lands at once.
+  // transition: applyListHeight() rewrites the inline height to measure. The
+  // animation sits over the inline styles instead, which is why renderEvents()
+  // cancels it. It also sits outside widget.css's reduced-motion override, so
+  // it checks the setting itself and lands at once.
   function easeBack(from) {
     if (!el.events.classList.contains('has-content')) return Promise.resolve();
     applyListHeight(); // the dropped height is now the list's limit
@@ -536,24 +551,40 @@
     }).catch(function () {});
   }
 
-  function endDrag(e) {
-    if (!grab || e.pointerId !== grab.pointerId) return;
+  // Ends the drag. A drop (commit) saves the height as the list's limit, unless
+  // it only lowers a limit that wasn't on screen. Either way the list eases back
+  // and the window refits.
+  function finishDrag(commit) {
     const g = grab;
     grab = null;
     document.documentElement.classList.remove('is-resizing');
     el.grip.classList.remove('is-dragging');
+    // A drag cut short still has the pointer, which would send the next press
+    // anywhere in the window to the grip. Losing it runs endDrag, a no-op now.
+    if (el.grip.hasPointerCapture(g.pointerId)) el.grip.releasePointerCapture(g.pointerId);
     if (!g.moved) return;
-    state.listHeight = g.height;
-    // Saved before the window refits, because main only lets the widget past
-    // its height budget once the list has a limit of its own. The window stays
-    // held through the ease-back, or the list would be cut off as it eases.
-    const saved = window.widgetAPI && window.widgetAPI.setListHeight
-      ? window.widgetAPI.setListHeight(g.height).catch(function () {})
-      : Promise.resolve();
+    let saved = Promise.resolve();
+    if (commit && (!g.fits || g.height > g.limit)) {
+      state.listHeight = g.height;
+      // Saved before the window refits, because main only lets the widget past
+      // its height budget once the list has a limit of its own.
+      if (window.widgetAPI && window.widgetAPI.setListHeight) {
+        saved = window.widgetAPI.setListHeight(g.height).catch(function () {});
+      }
+    }
+    // The window stays held through the ease-back, or the list would be cut off
+    // as it eases.
     Promise.all([saved, easeBack(g.height)]).then(function () {
       // A new drag that already took hold keeps the window open for itself.
       if (!grab || !grab.moved) syncHeight.release();
     });
+  }
+
+  // Only a pointerup is a drop. A cancel, or capture lost without one, ends the
+  // drag without saving.
+  function endDrag(e) {
+    if (!grab || e.pointerId !== grab.pointerId) return;
+    finishDrag(e.type === 'pointerup');
   }
 
   el.grip.addEventListener('pointerdown', function (e) {
@@ -563,6 +594,9 @@
     if (settling) settling.finish();
     const list = el.eventsScroll.getBoundingClientRect().height;
     const chrome = el.card.getBoundingClientRect().height - list;
+    // The limit the list is held to now. A list shorter than it fits its
+    // events, and the limit itself isn't on screen.
+    const limit = parseFloat(el.eventsScroll.style.maxHeight);
     grab = {
       pointerId: e.pointerId,
       startY: e.screenY,
@@ -570,6 +604,8 @@
       chrome: chrome,
       // Until main holds the window open, the list can only use what's there.
       maxHeight: Math.max(list, Math.floor(window.innerHeight - chrome)),
+      limit: limit,
+      fits: list < limit - 1,
       moved: false,
       height: Math.round(list),
     };
@@ -578,6 +614,12 @@
 
   el.grip.addEventListener('pointermove', function (e) {
     if (!grab || e.pointerId !== grab.pointerId) return;
+    // No button held means the release went somewhere else: the OS took the
+    // mouse away mid-drag. Nothing was dropped.
+    if (e.buttons === 0) {
+      finishDrag(false);
+      return;
+    }
     const dy = e.screenY - grab.startY;
     if (!grab.moved) {
       if (Math.abs(dy) < DRAG_SLOP) return;
@@ -595,6 +637,11 @@
   el.grip.addEventListener('pointerup', endDrag);
   el.grip.addEventListener('pointercancel', endDrag);
   el.grip.addEventListener('lostpointercapture', endDrag);
+  // Another window coming to the front mid-drag can take the mouse away
+  // without any pointer event arriving here.
+  window.addEventListener('blur', function () {
+    if (grab) finishDrag(false);
+  });
 
   el.grip.addEventListener('dblclick', function () {
     if (state.listHeight === null) return;
@@ -650,20 +697,20 @@
       try {
         const wa = await window.widgetAPI.getWorkArea();
         if (wa && wa.maxWidgetHeight) state.maxWidgetHeight = wa.maxWidgetHeight;
-        if (wa && wa.height) state.workAreaHeight = wa.height;
+        if (wa && wa.roomBelow) state.roomBelow = wa.roomBelow;
       } catch {
         /* keep the default budget */
       }
       try {
-        const h = await window.widgetAPI.getListHeight();
-        if (Number.isFinite(h) && h > 0) state.listHeight = h;
+        // Main validates it: a positive height, or null for none.
+        state.listHeight = await window.widgetAPI.getListHeight();
       } catch {
         /* fit the events */
       }
       window.widgetAPI.onWorkAreaChanged(function (wa) {
         if (wa && wa.maxWidgetHeight) {
           state.maxWidgetHeight = wa.maxWidgetHeight;
-          if (wa.height) state.workAreaHeight = wa.height;
+          if (wa.roomBelow) state.roomBelow = wa.roomBelow;
           renderEvents();
         }
       });

@@ -153,6 +153,21 @@ ok('an unchanged size keeps the rect and the anchor', same(still.anchor, calenda
 const resizedAway = p.resize(onLeft, { width: 320, height: 300 }, { width: 320, height: 340 }, [AT_125], 1);
 ok('a resize on the fallback display keeps the anchor\'s own monitor', resizedAway.anchor.display === 2);
 
+// --- the room below a widget's top, which caps one whose list has a limit ---
+
+const roomTop = p.roomBelow({ display: 1, left: 360, top: 60 }, { width: 320, height: 367 }, [AT_125], 1);
+ok('the room below a widget runs from its top to the bottom of the work area', roomTop === 816 - 60, String(roomTop));
+
+const roomLow = p.roomBelow(low, { width: 320, height: 260 }, [AT_125], 1);
+ok('one anchored to the bottom has only what is under its top', roomLow === 816 - 500, String(roomLow));
+
+const grownLow = p.resize(low, { width: 320, height: 260 }, { width: 320, height: 300 }, [AT_125], 1);
+ok('a resize within the room leaves it as it was',
+  p.roomBelow(grownLow.anchor, { width: 320, height: 300 }, [AT_125], 1) === roomLow);
+
+const roomUnderBar = p.roomBelow({ display: 3, left: 20, top: 15 }, { width: 320, height: 300 }, [TASKBAR_ON_TOP], 3);
+ok('the room stops at the bottom of the work area, not of the screen', roomUnderBar === 816 - 15, String(roomUnderBar));
+
 // --- holding a window open for a drag on the events list ---
 
 const held = p.stretchDown({ display: 1, left: 360, top: 60 }, { width: 320, height: 367 }, [AT_125], 1);
