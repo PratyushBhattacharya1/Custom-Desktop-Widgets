@@ -29,9 +29,19 @@
       window.widgetAPI.requestSize(both ? { width: w, height: h } : { height: h });
     }
 
+    // A card that grew is reported at once: until the window catches up, its
+    // bottom is cut off, which the 50 ms wait made visible. A shrink still waits
+    // for the card to settle, since the window's spare height is transparent
+    // and nobody sees it.
     function sync() {
       if (held) return;
       if (timer) clearTimeout(timer);
+      timer = null;
+      const rect = card.getBoundingClientRect();
+      if (Math.ceil(rect.height) > lastH + 1 || (both && Math.ceil(rect.width) > lastW + 1)) {
+        report(false);
+        return;
+      }
       timer = setTimeout(function () { report(false); }, 50);
     }
 

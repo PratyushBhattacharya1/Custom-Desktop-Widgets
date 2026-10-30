@@ -205,8 +205,9 @@
     const scroll = el.eventsScroll;
     scroll.textContent = '';
 
-    // No selection, or nothing on that day, means the panel collapses away.
-    if (!state.selected) {
+    // No selection, or nothing on that day, means the panel collapses away. So
+    // does the month picker: the panel belongs to the day grid.
+    if (!state.selected || state.view === 'months') {
       collapseEvents();
       return;
     }
@@ -416,11 +417,17 @@
     loadMonth();
   }
 
+  // The month label can close the picker without a month being picked, which
+  // shows the cursor month straight away. So a year step is a move like any
+  // other: it clears the selection and loads the month it moved to, or the grid
+  // would show the old month's events.
   function stepYear(delta) {
     const y = state.cursor.y + delta;
     if (y < MIN_YEAR || y > MAX_YEAR) return;
     state.cursor = { y: y, m: state.cursor.m };
+    state.selected = null;
     render();
+    loadMonth();
   }
 
   function goToToday() {
