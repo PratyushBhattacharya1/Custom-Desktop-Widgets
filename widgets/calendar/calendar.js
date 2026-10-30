@@ -1,7 +1,8 @@
 // Calendar widget renderer.
 //
 // Two views share one header: a Monday-start day grid, and a month picker. The
-// events panel below shows the selected day and drives the window's height.
+// events panel below shows the selected day and drives the window's height, and
+// the grip under it sets how tall its list can grow.
 (function () {
   const MIN_YEAR = 1926;
   const MAX_YEAR = 2099;
@@ -24,6 +25,7 @@
     monthGrid: document.getElementById('month-grid'),
     events: document.getElementById('events'),
     eventsScroll: document.getElementById('events-scroll'),
+    grip: document.getElementById('events-grip'),
   };
 
   function todayParts() {
@@ -39,6 +41,8 @@
     today: start,
     month: null,          // { instances, calendars, status } for the cursor month
     maxWidgetHeight: 460, // replaced by the real work-area budget at init
+    workAreaHeight: 1000, // also replaced at init: the most a list sized by hand gets
+    listHeight: null,     // the most the events list grows to once dragged; null uses the budget
   };
 
   const sameDay = (a, b) => !!a && !!b && a.y === b.y && a.m === b.m && a.d === b.d;
@@ -186,7 +190,14 @@
 
   function collapseEvents() {
     el.events.classList.remove('has-content');
+    // A drag that's under way would otherwise hold the empty panel open.
+    el.eventsScroll.style.height = '';
     el.eventsScroll.style.maxHeight = '';
+    // A refresh or midnight can empty the day mid-drag. With no list left to
+    // size, the drag ends: losing capture runs endDrag.
+    if (grab && el.grip.hasPointerCapture(grab.pointerId)) {
+      el.grip.releasePointerCapture(grab.pointerId);
+    }
     syncHeight();
   }
 
@@ -233,18 +244,35 @@
       group.forEach((inst) => addEvent(scroll, inst));
     }
 
-    applyMaxHeight();
+    applyListHeight();
     syncHeight();
   }
 
-  // Caps the scroll area so the whole widget stays within its height budget.
-  function applyMaxHeight() {
-    el.eventsScroll.style.maxHeight = 'none';
+  const LIST_MIN = 60; // the shortest the list gets from its budget or a drag
+
+  // Sizes the scroll area. The list fits its events up to a limit, then
+  // scrolls. The limit keeps the whole widget within its height budget, or,
+  // once the user has dragged the grip, it's the height they dropped it at, as
+  // far as the work area allows. Mid-drag, the list takes the drag's height
+  // exactly, even past its last event.
+  function applyListHeight() {
+    const scroll = el.eventsScroll;
+    const top = scroll.scrollTop; // measuring at full length clamps it to 0
+    scroll.style.height = '';
+    scroll.style.maxHeight = 'none';
     const cardHeight = el.card.getBoundingClientRect().height;
-    const scrollHeight = el.eventsScroll.getBoundingClientRect().height;
+    const scrollHeight = scroll.getBoundingClientRect().height;
     const chrome = cardHeight - scrollHeight; // everything that isn't the list
-    const budget = state.maxWidgetHeight - chrome;
-    el.eventsScroll.style.maxHeight = Math.max(60, Math.round(budget)) + 'px';
+    if (grab && grab.moved) {
+      scroll.style.height = grab.height + 'px';
+    } else if (state.listHeight !== null) {
+      const room = Math.max(LIST_MIN, Math.round(state.workAreaHeight - chrome));
+      scroll.style.maxHeight = Math.min(state.listHeight, room) + 'px';
+    } else {
+      const budget = state.maxWidgetHeight - chrome;
+      scroll.style.maxHeight = Math.max(LIST_MIN, Math.round(budget)) + 'px';
+    }
+    scroll.scrollTop = top;
   }
 
   // ---------------------------------------------------------------- cross-fade
@@ -439,7 +467,137 @@
   // is reported. The shared helper owns the ResizeObserver and Guard 1.
   const syncHeight = window.widgetAutosize
     ? window.widgetAutosize(el.card, { axes: 'height' })
-    : function () {};
+    : Object.assign(function () {}, { hold: function () {}, release: function () {} });
+
+  // ---------------------------------------------------------------- list grip
+
+  // Dragging the grip sets how tall the events list may grow. The first move
+  // past the slop holds the window open down to the bottom of the work area, so
+  // the list follows the pointer with no size request to wait on. The drag
+  // shows the exact height it sets, even past the last event, so the empty room
+  // shows what a busier day can fit. On release the height is saved, and the
+  // list eases back to fit its events before the window refits around the card:
+  // the ease-back is what tells the user the height is a limit. A press that
+  // never moves is a click and changes nothing, so a double-click, which puts
+  // the list back on its budget, never stretches the window.
+  const DRAG_SLOP = 3; // px a press can wander and still be a click
+  const EASE_MS = 180;
+
+  // { pointerId, startY, startHeight, chrome, maxHeight, moved, height }
+  let grab = null;
+  let settling = null; // the ease-back animation while it runs
+
+  // Eases the list from the dropped height down to its events, if they're
+  // shorter, and resolves once it's there. element.animate() rather than a CSS
+  // transition: applyListHeight() rewrites the inline height to measure, and an
+  // animation sits over the inline styles, so a re-render mid-ease can't strand
+  // it. It also sits outside widget.css's reduced-motion override, so it checks
+  // the setting itself and lands at once.
+  function easeBack(from) {
+    if (!el.events.classList.contains('has-content')) return Promise.resolve();
+    applyListHeight(); // the dropped height is now the list's limit
+    const to = el.eventsScroll.getBoundingClientRect().height;
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (to >= from - 1 || reduce || !el.eventsScroll.animate) return Promise.resolve();
+    const anim = el.eventsScroll.animate(
+      [{ height: from + 'px' }, { height: to + 'px' }],
+      { duration: EASE_MS, easing: 'ease-out' }
+    );
+    settling = anim;
+    return new Promise(function (resolve) {
+      // Net for a hidden window, where an animation may never finish.
+      const timer = setTimeout(function () { anim.finish(); }, EASE_MS + 300);
+      function done() {
+        clearTimeout(timer);
+        if (settling === anim) settling = null;
+        resolve();
+      }
+      anim.finished.then(done, done);
+    });
+  }
+
+  function startDrag() {
+    const g = grab;
+    g.moved = true;
+    syncHeight.hold();
+    document.documentElement.classList.add('is-resizing');
+    el.grip.classList.add('is-dragging');
+    if (!window.widgetAPI || !window.widgetAPI.beginResize) return;
+    window.widgetAPI.beginResize().then(function (height) {
+      if (grab !== g || !Number.isFinite(height)) return;
+      g.maxHeight = Math.max(g.maxHeight, Math.floor(height - g.chrome));
+    }).catch(function () {});
+  }
+
+  function endDrag(e) {
+    if (!grab || e.pointerId !== grab.pointerId) return;
+    const g = grab;
+    grab = null;
+    document.documentElement.classList.remove('is-resizing');
+    el.grip.classList.remove('is-dragging');
+    if (!g.moved) return;
+    state.listHeight = g.height;
+    // Saved before the window refits, because main only lets the widget past
+    // its height budget once the list has a limit of its own. The window stays
+    // held through the ease-back, or the list would be cut off as it eases.
+    const saved = window.widgetAPI && window.widgetAPI.setListHeight
+      ? window.widgetAPI.setListHeight(g.height).catch(function () {})
+      : Promise.resolve();
+    Promise.all([saved, easeBack(g.height)]).then(function () {
+      // A new drag that already took hold keeps the window open for itself.
+      if (!grab || !grab.moved) syncHeight.release();
+    });
+  }
+
+  el.grip.addEventListener('pointerdown', function (e) {
+    if (e.button !== 0 || grab) return;
+    e.preventDefault();
+    // A press mid-ease lands it at once, so the drag starts where the list is.
+    if (settling) settling.finish();
+    const list = el.eventsScroll.getBoundingClientRect().height;
+    const chrome = el.card.getBoundingClientRect().height - list;
+    grab = {
+      pointerId: e.pointerId,
+      startY: e.screenY,
+      startHeight: list,
+      chrome: chrome,
+      // Until main holds the window open, the list can only use what's there.
+      maxHeight: Math.max(list, Math.floor(window.innerHeight - chrome)),
+      moved: false,
+      height: Math.round(list),
+    };
+    el.grip.setPointerCapture(e.pointerId);
+  });
+
+  el.grip.addEventListener('pointermove', function (e) {
+    if (!grab || e.pointerId !== grab.pointerId) return;
+    const dy = e.screenY - grab.startY;
+    if (!grab.moved) {
+      if (Math.abs(dy) < DRAG_SLOP) return;
+      startDrag();
+    }
+    // A list already shorter than the floor can't be stretched to it in one jump.
+    const floor = Math.min(LIST_MIN, grab.startHeight);
+    grab.height = Math.round(Math.max(floor, Math.min(grab.startHeight + dy, grab.maxHeight)));
+    el.eventsScroll.style.maxHeight = 'none';
+    el.eventsScroll.style.height = grab.height + 'px';
+  });
+
+  // lostpointercapture also follows every pointerup, which endDrag ignores
+  // because the grab is already over.
+  el.grip.addEventListener('pointerup', endDrag);
+  el.grip.addEventListener('pointercancel', endDrag);
+  el.grip.addEventListener('lostpointercapture', endDrag);
+
+  el.grip.addEventListener('dblclick', function () {
+    if (state.listHeight === null) return;
+    state.listHeight = null;
+    if (window.widgetAPI && window.widgetAPI.setListHeight) {
+      window.widgetAPI.setListHeight(null).catch(function () {});
+    }
+    // The card can change height, and the ResizeObserver refits the window.
+    applyListHeight();
+  });
 
   // ---------------------------------------------------------------- midnight
 
@@ -485,12 +643,20 @@
       try {
         const wa = await window.widgetAPI.getWorkArea();
         if (wa && wa.maxWidgetHeight) state.maxWidgetHeight = wa.maxWidgetHeight;
+        if (wa && wa.height) state.workAreaHeight = wa.height;
       } catch {
         /* keep the default budget */
+      }
+      try {
+        const h = await window.widgetAPI.getListHeight();
+        if (Number.isFinite(h) && h > 0) state.listHeight = h;
+      } catch {
+        /* fit the events */
       }
       window.widgetAPI.onWorkAreaChanged(function (wa) {
         if (wa && wa.maxWidgetHeight) {
           state.maxWidgetHeight = wa.maxWidgetHeight;
+          if (wa.height) state.workAreaHeight = wa.height;
           renderEvents();
         }
       });

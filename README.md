@@ -53,6 +53,7 @@ Feeds refresh every 60 minutes (configurable via `refreshMinutes`), on wake from
 
 - **Week starts Monday.** Today is always filled blue; the selected day gets a blue outline.
 - **Click a day** to see its events below the grid. The widget grows and shrinks to fit, up to 45% of your monitor's work area, then scrolls.
+- **Drag the bottom edge** of the events panel to change how tall it can grow, as far down as the bottom of the screen. Days with fewer events still shrink to fit them; days with more scroll. The limit is remembered next launch, and double-clicking the edge goes back to 45%.
 - **Chevrons** change month (up = previous, down = next). Navigating clears the selection and collapses the events panel.
 - **"Today"** jumps back to the present day from anywhere.
 - **Click the month/year label** to open a month picker; its chevrons step the year (1926–2099).

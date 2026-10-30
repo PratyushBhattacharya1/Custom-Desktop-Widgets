@@ -51,6 +51,9 @@
     <div class="events" id="events">
       <div class="events-scroll thin-scroll" id="events-scroll"></div>
     </div>
+    <!-- Pointer-only, so hidden from assistive tech: there's no keyboard resize. -->
+    <div class="events-grip" id="events-grip" aria-hidden="true"
+         title="Drag to set how tall the list can grow. Double-click to reset."></div>
   </div>
 
   <!-- Shared helpers first: calendar.js calls window.widgetAutosize at load. -->

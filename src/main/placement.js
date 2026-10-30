@@ -152,6 +152,18 @@ function resize(anchor, oldSize, size, displays, primaryId) {
   return { rect, anchor: next };
 }
 
+// The rect for a widget stretched from where its top is now down to the bottom
+// of its work area, and never shorter than it is. A drag on the calendar's
+// events list holds the window open like this, so the list can follow the
+// pointer at full frame rate with no size request per frame. Stretching only
+// downwards keeps the header and grid still under the cursor: a window grown
+// past the work area would slide up, as resize() makes it.
+function stretchDown(anchor, size, displays, primaryId) {
+  const area = anchorDisplay(anchor, displays, primaryId).workArea;
+  const rect = fromAnchor(anchor, size, displays, primaryId);
+  return { ...rect, height: Math.max(rect.height, area.y + area.height - rect.y) };
+}
+
 // True when two rects differ by no more than Windows' rounding.
 function closeTo(a, b) {
   return (
@@ -164,5 +176,6 @@ function closeTo(a, b) {
 
 module.exports = {
   DRIFT,
-  pickDisplay, fitRect, isAnchor, toAnchor, anchorFromRect, anchorDisplay, fromAnchor, resize, closeTo,
+  pickDisplay, fitRect, isAnchor, toAnchor, anchorFromRect, anchorDisplay, fromAnchor, resize, stretchDown,
+  closeTo,
 };

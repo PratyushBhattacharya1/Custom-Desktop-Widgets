@@ -97,6 +97,28 @@ function register(widgets) {
     applySize(win, size);
   });
 
+  ipcMain.handle('widget:begin-resize', (event) => {
+    const win = windowFor(event);
+    if (!win) return null;
+    return beginResize(win);
+  });
+
+  ipcMain.handle('widget:get-list-height', (event) => {
+    const win = windowFor(event);
+    if (!win) return null;
+    return listHeightFor(win.__widgetId);
+  });
+
+  ipcMain.handle('widget:set-list-height', (event, height) => {
+    const win = windowFor(event);
+    if (!win) return null;
+    // Anything but a positive number clears it, and undefined drops the key
+    // when the store serialises, so the list goes back to the widget's budget.
+    const value = Number.isFinite(height) && height > 0 ? Math.round(height) : undefined;
+    store.patch(win.__widgetId, { listHeight: value });
+    return listHeightFor(win.__widgetId);
+  });
+
   // --- calendar ---
   ipcMain.handle('calendar:get-month', (_event, payload) => {
     const year = Number(payload && payload.year);
@@ -186,6 +208,13 @@ function boundsFor(id) {
   return placement.fromAnchor(anchorFor(id), sizeFor(id), displays(), primaryId());
 }
 
+// The most the widget's list may grow to (the calendar's events list), set by a
+// drag on its grip, or null for a list limited by the widget's budget.
+function listHeightFor(id) {
+  const value = store.get(id).listHeight;
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 // Windows in a user drag: from 'will-move', which fires only for a move the user
 // makes and never for setBounds, until 'moved'. Placement leaves them alone: a
 // setBounds now would aim at the spot the drag started from, and Electron
@@ -195,6 +224,12 @@ const dragging = new WeakSet();
 // Windows inside one of our own setBounds calls, whose 'move'/'resize' events
 // must not re-enter place().
 const placing = new WeakSet();
+
+// Windows held open for a drag on the calendar's events list, from beginResize
+// until the next size request, which the renderer sends when the drag ends.
+// Placement leaves them alone too: putting one back at its saved size would cut
+// the list off under the pointer.
+const resizing = new WeakSet();
 
 function setBounds(win, rect) {
   placing.add(win);
@@ -231,7 +266,7 @@ function initialBounds(id) {
 // the setBounds when it's already there, because display events fire often (a
 // taskbar auto-hiding is one) and so do the window's own 'move' and 'resize'.
 function place(win) {
-  if (!win || win.isDestroyed() || dragging.has(win) || placing.has(win)) return;
+  if (!win || win.isDestroyed() || dragging.has(win) || resizing.has(win) || placing.has(win)) return;
   if (!displays().length) return;
   const target = boundsFor(win.__widgetId);
   if (!placement.closeTo(win.getBounds(), target)) setBounds(win, target);
@@ -265,6 +300,25 @@ function resetPosition(win) {
   place(win);
 }
 
+// The start of a drag on the calendar's events list. The window stretches down
+// to the bottom of its work area and is held there, so the list can grow into it
+// as fast as the pointer moves. Growing the window with a size request per
+// pointer move would hit the rate limit, and the list would be cut off until the
+// window caught up. Nothing is saved: the size request that ends the drag starts
+// from the saved anchor and size, like any other. Returns the window's height,
+// or null while Windows reports no displays.
+function beginResize(win) {
+  const all = displays();
+  if (!all.length) return null;
+  const id = win.__widgetId;
+  const rect = placement.stretchDown(anchorFor(id), sizeFor(id), all, primaryId());
+  if (!resizing.has(win)) {
+    resizing.add(win);
+    setBounds(win, rect);
+  }
+  return rect.height;
+}
+
 // --- size application, with the three anti-oscillation guards ---
 //
 // Only an axis the widget measures is applied or saved (see fits). Any other
@@ -273,6 +327,8 @@ function resetPosition(win) {
 const sizeState = new WeakMap(); // win -> { last: {w, h}, times: [], warned }
 
 function applySize(win, requested) {
+  // The request that ends a drag on the events list also ends its hold.
+  resizing.delete(win);
   const id = win.__widgetId;
   const want = (axis) =>
     fits(id, axis) && requested && Number.isFinite(requested[axis]) ? Math.round(requested[axis]) : null;
@@ -306,8 +362,11 @@ function applySize(win, requested) {
 
   // Never let a widget run off the screen: the calendar's own scrollbar absorbs
   // whatever doesn't fit, and placement.resize slides the window back on when it
-  // would overhang the work area.
-  const capH = Math.max(MIN_CAP.h, budget.maxWidgetHeight);
+  // would overhang the work area. A list whose limit the user dragged may reach
+  // the bottom of the work area, so its widget is capped at the work area's
+  // height instead of the budget.
+  const roomH = listHeightFor(id) === null ? budget.maxWidgetHeight : budget.height;
+  const capH = Math.max(MIN_CAP.h, roomH);
   const capW = Math.max(MIN_CAP.w, budget.maxWidgetWidth);
 
   const targetH = wantH === null ? size.height : Math.max(MIN_SIZE.h, Math.min(wantH, capH));
