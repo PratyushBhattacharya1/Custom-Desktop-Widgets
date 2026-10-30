@@ -123,6 +123,7 @@ Data flows `gmail.local.json` → `gmail/auth.js` → `gmail/service.js` → `gm
 Rules:
 
 - The refresh token is stored only through `safeStorage`, in `userData/gmail-token.bin`. If OS encryption is unavailable, the token is not stored at all.
+- Use `safeStorage`'s async calls; the sync ones are deprecated. `isConnected()` must stay synchronous, because the context menu reads it on every popup. So `auth.init()` decrypts the token once at startup, before the Gmail service starts, and keeps the result as a flag. Every later write goes through `saveRefreshToken()` or `clearRefreshToken()`, which update the flag, so it can't drift from the file.
 - The OAuth app is in Google's Testing status, so refresh tokens expire every 7 days. "Needs reconnect" is therefore a normal state. The widget shows it, and the email widget's context menu offers Connect/Reconnect Gmail… and Refresh now.
 - Only `invalid_grant` from the token endpoint means the credential is dead. A 401 or 403 from the Gmail API must not delete the refresh token, because rate limits also arrive as 403.
 - Only a complete fetch may overwrite the cache or the last-success timestamp.

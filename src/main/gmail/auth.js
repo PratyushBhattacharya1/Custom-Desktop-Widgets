@@ -31,14 +31,17 @@ function b64url(buf) {
 
 // Mirrors whether a usable token is on disk, so isConnected() doesn't have to
 // unwrap the credential to answer a yes/no question — it is asked on every
-// state read and, synchronously, on every context-menu popup. null: not yet
-// looked.
-let connected = null;
+// state read and, synchronously, on every context-menu popup, while safeStorage
+// only decrypts asynchronously. false until init() has read the file.
+let connected = false;
 
-function saveRefreshToken(token) {
+// safeStorage's synchronous calls are deprecated (Electron 45). The async ones
+// decrypt what the old ones encrypted, so a token stored by an older build
+// still reads.
+async function saveRefreshToken(token) {
   try {
-    if (safeStorage.isEncryptionAvailable()) {
-      fs.writeFileSync(TOKEN_PATH, safeStorage.encryptString(token));
+    if (await safeStorage.isAsyncEncryptionAvailable()) {
+      fs.writeFileSync(TOKEN_PATH, await safeStorage.encryptStringAsync(token));
       connected = true;
       return true;
     }
@@ -54,15 +57,22 @@ function saveRefreshToken(token) {
   }
 }
 
-function loadRefreshToken() {
+// Resolves with { result, shouldReEncrypt }, or null when there is no usable
+// token.
+async function decryptStored() {
   try {
     if (!fs.existsSync(TOKEN_PATH)) return null;
-    if (!safeStorage.isEncryptionAvailable()) return null;
-    const token = safeStorage.decryptString(fs.readFileSync(TOKEN_PATH));
-    return token || null;
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) return null;
+    const decrypted = await safeStorage.decryptStringAsync(fs.readFileSync(TOKEN_PATH));
+    return decrypted && decrypted.result ? decrypted : null;
   } catch {
     return null;
   }
+}
+
+async function loadRefreshToken() {
+  const decrypted = await decryptStored();
+  return decrypted ? decrypted.result : null;
 }
 
 function clearRefreshToken() {
@@ -72,10 +82,18 @@ function clearRefreshToken() {
   connected = false;
 }
 
+// Decrypts once, at startup, before the Gmail service reads isConnected().
+// Every later write to the file goes through saveRefreshToken() or
+// clearRefreshToken(), so the flag can't drift from what is stored.
+async function init() {
+  const decrypted = await decryptStored();
+  connected = Boolean(decrypted);
+  // The key was rotated, or a stronger one is available. Rewriting here, before
+  // the service starts, can't race a reconnect that stores a new token.
+  if (decrypted && decrypted.shouldReEncrypt) await saveRefreshToken(decrypted.result);
+}
+
 function isConnected() {
-  // Decrypted once; every write to the file goes through the two functions
-  // above, so the flag can't drift from what is stored.
-  if (connected === null) connected = Boolean(loadRefreshToken());
   return connected;
 }
 
@@ -214,7 +232,7 @@ function connect() {
           finish(new Error('no_refresh_token'));
           return;
         }
-        saveRefreshToken(tokens.refresh_token);
+        await saveRefreshToken(tokens.refresh_token);
         cacheAccessToken(tokens);
         reply('Gmail connected. You can close this tab and return to your widgets.');
         finish(null, true);
@@ -293,7 +311,7 @@ async function getAccessToken() {
     throw err;
   }
 
-  const refresh = loadRefreshToken();
+  const refresh = await loadRefreshToken();
   if (!refresh) {
     const err = new Error('Gmail is not connected.');
     err.needsReconnect = true;
@@ -335,6 +353,7 @@ function disconnect() {
 }
 
 module.exports = {
+  init,
   connect,
   disconnect,
   forgetAccessToken,
