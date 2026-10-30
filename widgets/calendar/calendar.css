@@ -120,7 +120,7 @@ td {
 
 /* Positioning context for the cross-fade ghost. The live table must stay in
    normal flow — if it were ever taken out, this box would collapse to zero and
-   applyMaxHeight()'s chrome measurement would go wrong. */
+   applyListHeight()'s chrome measurement would go wrong. */
 .days-stack {
   position: relative;
 }
@@ -236,8 +236,10 @@ td {
 
 /* Navigating months clears the selection, which collapses this panel. Fading it
    alongside the grid means the collapse lands at opacity 0 instead of snapping
-   23px of chrome away mid-animation. Never transition #events-scroll's
-   max-height — applyMaxHeight() writes that inline and resets it to `none`. */
+   23px of chrome away mid-animation. Never transition #events-scroll's height
+   or max-height — applyListHeight() writes both inline and resets them to
+   measure, and a drag on the grip writes height on every pointer move. The
+   ease-back after a drag uses element.animate(), which leaves both alone. */
 .events.is-fading {
   opacity: 0;
 }
@@ -252,6 +254,45 @@ td {
   overflow-x: hidden;
   -webkit-app-region: no-drag; /* a drag region would swallow scrollbar drags */
 }
+
+/* The handle under the events list that sets how tall it can grow. It fills
+   the card's 18px bottom padding, so it starts right at the list's lower edge,
+   and spans the card so it's easy to find. no-drag is required: on a drag region Windows would take
+   the press as a window move and the page would never see it. Shown only while
+   the panel is open, so a collapsed panel leaves that strip to move the widget. */
+.events-grip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 18px;
+  display: none;
+  place-items: center;
+  cursor: ns-resize;
+  touch-action: none; /* a touch drag here resizes rather than pans */
+  -webkit-app-region: no-drag;
+}
+.events.has-content ~ .events-grip { display: grid; }
+
+/* Out of sight at rest, like the pin, so the widget still reads as wallpaper.
+   Hovering the list hints at it and hovering the grip itself lights it up. The
+   list and the grip are both no-drag, which is what lets :hover fire on them. */
+.events-grip::before {
+  content: '';
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.45);
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.events:hover ~ .events-grip::before { opacity: 0.45; }
+.events-grip:hover::before,
+.events-grip.is-dragging::before { opacity: 1; }
+
+/* The pointer can stray off the grip mid-drag, and the cursor should stay. */
+html.is-resizing,
+html.is-resizing * { cursor: ns-resize !important; }
 
 .ev-section {
   font-size: 10px;

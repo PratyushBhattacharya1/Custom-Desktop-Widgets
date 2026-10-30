@@ -41,11 +41,18 @@ function budgetFor(area) {
 // The budget for the display the widget's anchor puts it on: the same display
 // applySize caps against, so the calendar's list and its window agree even while
 // the window is somewhere else (mid-drag, or moved by Windows). Null while
-// Windows reports no displays at all.
+// Windows reports no displays at all. roomBelow is what a list with a dragged
+// limit may grow the widget to. It changes only when the widget's top moves (a
+// drag, a display change, a reset), and each of those sends the new budget.
 function workAreaFor(win) {
   const all = displays();
   if (!all.length) return null;
-  return budgetFor(placement.anchorDisplay(anchorFor(win.__widgetId), all, primaryId()).workArea);
+  const id = win.__widgetId;
+  const anchor = anchorFor(id);
+  return {
+    ...budgetFor(placement.anchorDisplay(anchor, all, primaryId()).workArea),
+    roomBelow: placement.roomBelow(anchor, sizeFor(id), all, primaryId()),
+  };
 }
 
 // The last budget each window was given, as JSON. The calendar rebuilds its
@@ -95,6 +102,29 @@ function register(widgets) {
     const win = windowFor(event);
     if (!win) return;
     applySize(win, size);
+  });
+
+  // Only a widget that fits its height can hold its window open or keep a list
+  // height. Any other never sends the size request that ends a hold, so its
+  // window would stay stretched, and a list height would lift its cap.
+  ipcMain.handle('widget:begin-resize', (event) => {
+    const win = windowFor(event);
+    if (!win || !fits(win.__widgetId, 'height')) return null;
+    return beginResize(win);
+  });
+
+  ipcMain.handle('widget:get-list-height', (event) => {
+    const win = windowFor(event);
+    if (!win) return null;
+    return listHeightFor(win.__widgetId);
+  });
+
+  ipcMain.handle('widget:set-list-height', (event, height) => {
+    const win = windowFor(event);
+    if (!win || !fits(win.__widgetId, 'height')) return;
+    // Anything but a positive number clears it, and undefined drops the key
+    // when the store serialises, so the list goes back to the widget's budget.
+    store.patch(win.__widgetId, { listHeight: validListHeight(height) ?? undefined });
   });
 
   // --- calendar ---
@@ -186,6 +216,18 @@ function boundsFor(id) {
   return placement.fromAnchor(anchorFor(id), sizeFor(id), displays(), primaryId());
 }
 
+// A list height worth keeping: a positive number of DIP, else null for none.
+// The one check for both what the renderer sends and what the store holds.
+function validListHeight(value) {
+  return Number.isFinite(value) && value > 0 ? Math.round(value) : null;
+}
+
+// The most the widget's list may grow to (the calendar's events list), set by a
+// drag on its grip, or null for a list limited by the widget's budget.
+function listHeightFor(id) {
+  return validListHeight(store.get(id).listHeight);
+}
+
 // Windows in a user drag: from 'will-move', which fires only for a move the user
 // makes and never for setBounds, until 'moved'. Placement leaves them alone: a
 // setBounds now would aim at the spot the drag started from, and Electron
@@ -195,6 +237,12 @@ const dragging = new WeakSet();
 // Windows inside one of our own setBounds calls, whose 'move'/'resize' events
 // must not re-enter place().
 const placing = new WeakSet();
+
+// Windows held open for a drag on the calendar's events list, from beginResize
+// until the next size request, which the renderer sends when the drag ends.
+// Placement leaves them alone too: putting one back at its saved size would cut
+// the list off under the pointer.
+const resizing = new WeakSet();
 
 function setBounds(win, rect) {
   placing.add(win);
@@ -231,7 +279,7 @@ function initialBounds(id) {
 // the setBounds when it's already there, because display events fire often (a
 // taskbar auto-hiding is one) and so do the window's own 'move' and 'resize'.
 function place(win) {
-  if (!win || win.isDestroyed() || dragging.has(win) || placing.has(win)) return;
+  if (!win || win.isDestroyed() || dragging.has(win) || resizing.has(win) || placing.has(win)) return;
   if (!displays().length) return;
   const target = boundsFor(win.__widgetId);
   if (!placement.closeTo(win.getBounds(), target)) setBounds(win, target);
@@ -265,38 +313,91 @@ function resetPosition(win) {
   place(win);
 }
 
+// The start of a drag on the calendar's events list. The window stretches down
+// to the bottom of its work area and is held there, so the list can grow into it
+// as fast as the pointer moves. Growing the window with a size request per
+// pointer move would hit the rate limit, and the list would be cut off until the
+// window caught up. Nothing is saved: the size request that ends the drag starts
+// from the saved anchor and size, like any other. Returns the window's height,
+// or null while Windows reports no displays.
+function beginResize(win) {
+  const all = displays();
+  if (!all.length) return null;
+  const id = win.__widgetId;
+  const rect = placement.stretchDown(anchorFor(id), sizeFor(id), all, primaryId());
+  if (!resizing.has(win)) {
+    resizing.add(win);
+    setBounds(win, rect);
+  }
+  return rect.height;
+}
+
+// Ends a hold that the renderer can't end itself, because it crashed, and puts
+// the window back at its saved size so it doesn't stay stretched over the
+// desktop.
+function endResize(win) {
+  if (resizing.delete(win)) place(win);
+}
+
 // --- size application, with the three anti-oscillation guards ---
 //
 // Only an axis the widget measures is applied or saved (see fits). Any other
 // stays at its registry size, which is what lets the calendar send height only
 // and keep its 320 px width.
-const sizeState = new WeakMap(); // win -> { last: {w, h}, times: [], warned }
+const sizeState = new WeakMap(); // win -> { last: {w, h}, times: [], warned, pending, timer }
 
 function applySize(win, requested) {
+  // The request that ends a drag on the events list also ends its hold. One
+  // with nothing to apply hands the window back to place(), or it would stay
+  // stretched over the desktop. Without displays place() can't either, and the
+  // display event that brings them back places it.
+  const held = resizing.delete(win);
   const id = win.__widgetId;
   const want = (axis) =>
     fits(id, axis) && requested && Number.isFinite(requested[axis]) ? Math.round(requested[axis]) : null;
   const wantW = want('width');
   const wantH = want('height');
-  if (wantW === null && wantH === null) return;
+  if (wantW === null && wantH === null) {
+    if (held) place(win);
+    return;
+  }
   const all = displays();
   if (!all.length) return;
 
-  const state = sizeState.get(win) || { last: { w: null, h: null }, times: [], warned: false };
+  const state = sizeState.get(win) ||
+    { last: { w: null, h: null }, times: [], warned: false, pending: null, timer: null };
   sizeState.set(win, state);
 
   // Guard 3: hard rate limit, shared across both axes so a widget oscillating
-  // in width and height still can't spin the main process.
+  // in width and height still can't spin the main process. A request over the
+  // limit waits for the second to be up instead of being dropped, because the
+  // renderer's Guard 1 already counts it as sent and would never send it again.
+  // Only the latest waits: a newer request replaces it, and one applied in the
+  // meantime makes it stale.
   const now = Date.now();
   state.times = state.times.filter((t) => now - t < 1000);
   if (state.times.length >= 10) {
     if (!state.warned) {
-      console.warn(`Size request rate limit hit for "${id}"; dropping.`);
+      console.warn(`Size request rate limit hit for "${id}"; deferring.`);
       state.warned = true;
+    }
+    state.pending = requested;
+    if (!state.timer) {
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        const next = state.pending;
+        state.pending = null;
+        if (!win.isDestroyed()) applySize(win, next);
+      }, 1000 - (now - state.times[0]));
     }
     return;
   }
   state.times.push(now);
+  if (state.timer) {
+    clearTimeout(state.timer);
+    state.timer = null;
+    state.pending = null;
+  }
 
   // Everything below starts from the saved anchor and size, never from
   // getBounds(), so Windows' rounding can't accumulate across requests.
@@ -306,8 +407,14 @@ function applySize(win, requested) {
 
   // Never let a widget run off the screen: the calendar's own scrollbar absorbs
   // whatever doesn't fit, and placement.resize slides the window back on when it
-  // would overhang the work area.
-  const capH = Math.max(MIN_CAP.h, budget.maxWidgetHeight);
+  // would overhang the work area. A list whose limit the user dragged may grow
+  // its widget down to the bottom of the work area when that's more than the
+  // budget, but no further. Past it the window would move up, and the anchor
+  // picked again would keep it there on lighter days and at other scales.
+  const roomH = listHeightFor(id) === null
+    ? budget.maxWidgetHeight
+    : Math.max(budget.maxWidgetHeight, placement.roomBelow(anchor, size, all, primaryId()));
+  const capH = Math.max(MIN_CAP.h, roomH);
   const capW = Math.max(MIN_CAP.w, budget.maxWidgetWidth);
 
   const targetH = wantH === null ? size.height : Math.max(MIN_SIZE.h, Math.min(wantH, capH));
@@ -350,5 +457,5 @@ module.exports = {
   register, workAreaFor, newWorkArea, applySize,
   MAX_HEIGHT_FRACTION, MAX_WIDTH_FRACTION, MIN_SIZE, MIN_CAP,
   setPinned, pushSettings,
-  initialBounds, place, startDrag, rememberPosition, resetPosition,
+  initialBounds, place, startDrag, rememberPosition, resetPosition, endResize,
 };

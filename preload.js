@@ -16,6 +16,14 @@ contextBridge.exposeInMainWorld('widgetAPI', {
     ipcRenderer.on('widget:work-area-changed', (_event, data) => cb(data)),
   requestSize: (size) => ipcRenderer.send('widget:request-size', size),
 
+  // A drag on the calendar's events list: the window stretches to the bottom of
+  // its work area until the next requestSize, and resolves with its new height.
+  beginResize: () => ipcRenderer.invoke('widget:begin-resize'),
+  // The most the list may grow to, in DIP, once the user has dragged its grip;
+  // null for the widget's height budget.
+  getListHeight: () => ipcRenderer.invoke('widget:get-list-height'),
+  setListHeight: (height) => ipcRenderer.invoke('widget:set-list-height', height),
+
   // Appearance settings. There is deliberately no setter: the context menu
   // lives in main, so a renderer-side writer would be unused attack surface.
   getSettings: () => ipcRenderer.invoke('widget:get-settings'),

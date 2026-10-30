@@ -33,7 +33,7 @@ function createWidget(widget) {
     height: bounds.height,
     frame: false,          // no title bar / borders
     transparent: true,     // lets rounded/irregular widget shapes show through
-    resizable: false,      // no drag-to-resize; the calendar resizes itself via setBounds
+    resizable: false,      // a transparent window can't use native edge resizing; widgets size themselves via setBounds
     hasShadow: false,
     skipTaskbar: true,     // don't clutter the taskbar with widgets
     alwaysOnTop: false,    // normal z-order — widgets behave like ordinary windows
@@ -92,6 +92,10 @@ function createWidget(widget) {
   };
   win.on('move', replace);
   win.on('resize', replace);
+
+  // A renderer that crashes mid-drag on the calendar's events list can't send
+  // the size request that ends the hold keeping its window stretched.
+  win.webContents.on('render-process-gone', () => ipc.endResize(win));
 
   windows[widget.id] = win;
 }

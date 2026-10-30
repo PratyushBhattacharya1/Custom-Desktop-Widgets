@@ -153,6 +153,41 @@ ok('an unchanged size keeps the rect and the anchor', same(still.anchor, calenda
 const resizedAway = p.resize(onLeft, { width: 320, height: 300 }, { width: 320, height: 340 }, [AT_125], 1);
 ok('a resize on the fallback display keeps the anchor\'s own monitor', resizedAway.anchor.display === 2);
 
+// --- the room below a widget's top, which caps one whose list has a limit ---
+
+const roomTop = p.roomBelow({ display: 1, left: 360, top: 60 }, { width: 320, height: 367 }, [AT_125], 1);
+ok('the room below a widget runs from its top to the bottom of the work area', roomTop === 816 - 60, String(roomTop));
+
+const roomLow = p.roomBelow(low, { width: 320, height: 260 }, [AT_125], 1);
+ok('one anchored to the bottom has only what is under its top', roomLow === 816 - 500, String(roomLow));
+
+const grownLow = p.resize(low, { width: 320, height: 260 }, { width: 320, height: 300 }, [AT_125], 1);
+ok('a resize within the room leaves it as it was',
+  p.roomBelow(grownLow.anchor, { width: 320, height: 300 }, [AT_125], 1) === roomLow);
+
+const roomUnderBar = p.roomBelow({ display: 3, left: 20, top: 15 }, { width: 320, height: 300 }, [TASKBAR_ON_TOP], 3);
+ok('the room stops at the bottom of the work area, not of the screen', roomUnderBar === 816 - 15, String(roomUnderBar));
+
+// --- holding a window open for a drag on the events list ---
+
+const held = p.stretchDown({ display: 1, left: 360, top: 60 }, { width: 320, height: 367 }, [AT_125], 1);
+ok('a widget held open reaches from its top to the bottom of the work area',
+  same(held, { x: 360, y: 60, width: 320, height: 816 - 60 }), show(held));
+
+const heldLow = p.stretchDown(low, { width: 320, height: 260 }, [AT_125], 1);
+ok('so does one anchored to the bottom, and its top stays put',
+  heldLow.y === 500 && heldLow.y + heldLow.height === 816, show(heldLow));
+
+const heldFlush = p.stretchDown({ display: 1, left: 10, bottom: 0 }, { width: 360, height: 300 }, [AT_125], 1);
+ok('a widget already at the bottom keeps its size', heldFlush.y === 516 && heldFlush.height === 300, show(heldFlush));
+
+const heldTall = p.stretchDown(tall, { width: 320, height: 900 }, [AT_125], 1);
+ok('a widget taller than the work area is never shortened', heldTall.y === 0 && heldTall.height === 900, show(heldTall));
+
+const heldUnderBar = p.stretchDown({ display: 3, left: 20, top: 15 }, { width: 320, height: 300 }, [TASKBAR_ON_TOP], 3);
+ok('it stops at the bottom of the work area, not of the screen',
+  heldUnderBar.y === 63 && heldUnderBar.y + heldUnderBar.height === 48 + 816, show(heldUnderBar));
+
 ok('accepts one edge per axis', p.isAnchor({ display: 1, right: 8, top: 15 }));
 ok('accepts an anchor with no display', p.isAnchor({ left: 0, bottom: 0 }));
 const bad = [

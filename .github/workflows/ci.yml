@@ -50,3 +50,8 @@ jobs:
 
       - name: Placement checks
         run: node scripts/verify-placement.js
+
+      - name: Self-sizing checks
+        # Loads src/main/ipc.js with a stand-in electron module, so the window
+        # hold for the calendar's events-list drag is tested without Electron.
+        run: node scripts/verify-resize.js
