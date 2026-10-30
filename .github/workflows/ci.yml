@@ -29,11 +29,11 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          # The Node that the locked electron (31.7.7) embeds. Pin it exactly:
-          # Node 20.19+ enables require(esm), so a newer 20.x would load
-          # modules that Electron can't. Move this with the electron version;
+          # The Node that the locked electron (45.1.0) embeds. Pin it exactly,
+          # so the suites run on the app's Node: a newer 24.x can add APIs
+          # that Electron's Node lacks. Move this with the electron version;
           # ELECTRON_RUN_AS_NODE=1 npx electron -p process.versions.node
-          node-version: 20.18.0
+          node-version: 24.22.1
 
       - name: Syntax, JSON and secret checks
         run: node scripts/check.js
