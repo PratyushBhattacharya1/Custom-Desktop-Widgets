@@ -4,7 +4,7 @@ Guidance for coding agents working in this repository. `CLAUDE.md` imports this 
 
 ## Overview
 
-Frameless desktop widgets for Windows: a clock, a calendar fed by live read-only iCal feeds, and a Gmail inbox. Built with Electron 31 and plain HTML/CSS/JS. There is no framework, bundler, build step or runtime dependency; `electron` (a devDependency) is the only package. The app targets Windows. The context menu relies on the win32-only `system-context-menu` event and on how Windows hit-tests drag regions.
+Frameless desktop widgets for Windows: a clock, a calendar fed by live read-only iCal feeds, and a Gmail inbox. Built with Electron 45 and plain HTML/CSS/JS. There is no framework, bundler, build step or runtime dependency; `electron` (a devDependency) is the only package. The app targets Windows. The context menu relies on the win32-only `system-context-menu` event and on how Windows hit-tests drag regions.
 
 ## Commands
 
@@ -20,6 +20,7 @@ node scripts/verify-resize.js                 # window hold and autosize checks 
 node --check path/to/file.js                  # syntax check
 ```
 
+- `npm install` doesn't download the Electron binary (Electron 42 and later). The first `npm start` downloads it, or `npx install-electron` does it ahead of time. Both need Node 22.12 or newer. Run the scripts on the Node that Electron embeds, which CI pins in `ci.yml`.
 - There is no linter, formatter, test framework or `npm test`. `scripts/check.js` runs the static checks that CI runs: syntax (inline `<script>` blocks included), JSON, and secrets. `scripts/verify-ics.js`, `scripts/verify-gmail.js`, `scripts/verify-placement.js` and `scripts/verify-resize.js` are the only committed tests, and `scripts/mutate-ics.js` tests the ICS suite itself. Run `verify-ics.js` and `mutate-ics.js` after any change to `src/main/ics/`, `test/fixtures/` or either script, `verify-gmail.js` after any change under `src/main/gmail/`, `verify-placement.js` after any change to `src/main/placement.js`, and `verify-resize.js` after any change to `src/main/ipc.js` or `widgets/shared/autosize.js`.
 - `verify-resize.js` loads `ipc.js` with a stand-in for the electron module and runs `autosize.js` in a `vm` context with a stand-in card and clock. The stand-in serves only what `ipc.js` and the modules it requires use at load time (today just `app.getPath`), so anything new they call from electron at load time has to be added to it. The grip's drag and ease-back in `widgets/calendar/calendar.js` need a real renderer and have no committed test.
 - `verify-ics.js` runs two suites. The first checks `test/fixtures/synthetic.ics`, a hand-written calendar of made-up events, against exact expectations for each parser invariant (see Calendar pipeline). The script pins `TZ` to America/New_York for that suite, so it gives the same result on every machine and in CI. The second checks a personal Google Calendar export in the machine's own zone: the path you pass, or else the first `*.ical.zip` in the repo root, which is gitignored. Without an export only the fixture runs. The export suite's thresholds are tuned to that export (more than 400 events, instances in April 2024, a March 2024 DST check), so a different export can fail because of the data rather than the code.
@@ -122,6 +123,7 @@ Data flows `gmail.local.json` → `gmail/auth.js` → `gmail/service.js` → `gm
 Rules:
 
 - The refresh token is stored only through `safeStorage`, in `userData/gmail-token.bin`. If OS encryption is unavailable, the token is not stored at all.
+- Use `safeStorage`'s async calls; the sync ones are deprecated. `isConnected()` must stay synchronous, because the context menu reads it on every popup. So `auth.init()` decrypts the token once at startup, before the Gmail service starts, and keeps the result as a flag. Every later write goes through `saveRefreshToken()` or `clearRefreshToken()`, which update the flag, so it can't drift from the file.
 - The OAuth app is in Google's Testing status, so refresh tokens expire every 7 days. "Needs reconnect" is therefore a normal state. The widget shows it, and the email widget's context menu offers Connect/Reconnect Gmail… and Refresh now.
 - Only `invalid_grant` from the token endpoint means the credential is dead. A 401 or 403 from the Gmail API must not delete the refresh token, because rate limits also arrive as 403.
 - Only a complete fetch may overwrite the cache or the last-success timestamp.

@@ -4,6 +4,8 @@ Draggable, borderless desktop widgets (clock, calendar, email preview) built wit
 
 ## Run it
 
+Needs Node 22.12 or newer.
+
 ```bash
 npm install
 npm start

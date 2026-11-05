@@ -194,12 +194,20 @@ app.whenReady().then(() => {
     }
   });
 
-  gmailService.init();
   gmailService.onUpdated(() => {
     const mail = windows.email;
     if (mail && !mail.isDestroyed() && !mail.webContents.isDestroyed()) {
       mail.webContents.send('gmail:updated', gmailService.getState());
     }
+  });
+  // init() is async now (safeStorage only decrypts asynchronously), so a throw
+  // from reading the cache or config would otherwise be an unhandled rejection
+  // nobody sees. reportError() redacts it, logs nothing secret, and puts it on
+  // the widget, as the menu's Connect does. Listening first means that update
+  // reaches the window.
+  gmailService.init().catch((err) => {
+    const state = gmailService.reportError(err);
+    console.error('Gmail: failed to start:', state.error);
   });
 
   screen.on('display-metrics-changed', placeAll);

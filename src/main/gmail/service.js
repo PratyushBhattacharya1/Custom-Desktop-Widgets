@@ -321,12 +321,21 @@ function getState() {
   };
 }
 
-function init() {
+async function init() {
   // Cache first, so an offline or expired start still renders something.
   readCache();
   const cfg = config.load();
-  if (!cfg.ok) { state.needsSetup = true; state.error = cfg.reason; return; }
-  if (!auth.isConnected()) { state.needsReconnect = true; return; }
+  if (!cfg.ok) { state.needsSetup = true; state.error = cfg.reason; }
+  // Read the token even when the config is broken, so the menu still offers
+  // Reconnect rather than Connect while it is.
+  await auth.init();
+  if (!cfg.ok) return;
+  if (!auth.isConnected()) {
+    state.needsReconnect = true;
+    // The widget may have read its state while the token was decrypting.
+    emit();
+    return;
+  }
   refresh();
   startPolling();
 }
