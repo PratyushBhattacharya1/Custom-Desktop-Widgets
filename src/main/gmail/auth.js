@@ -35,13 +35,46 @@ function b64url(buf) {
 // only decrypts asynchronously. false until init() has read the file.
 let connected = false;
 
-// safeStorage's synchronous calls are deprecated (Electron 45). The async ones
-// decrypt what the old ones encrypted, so a token stored by an older build
-// still reads.
-async function saveRefreshToken(token) {
+// Bumped by every save and clear. init() decrypts asynchronously, so a Connect
+// or Disconnect can land while it waits; it acts on what it read only if the
+// counter hasn't moved, or it would resurrect a token the user just removed.
+let generation = 0;
+
+// Write to a temp file in the same folder, then rename it over the token, so a
+// crash mid-write leaves the old token whole instead of a truncated one that
+// no longer decrypts. Only ciphertext ever reaches either file.
+function writeAtomic(data) {
+  const tmp = TOKEN_PATH + '.' + process.pid + '.tmp';
   try {
-    if (await safeStorage.isAsyncEncryptionAvailable()) {
-      fs.writeFileSync(TOKEN_PATH, await safeStorage.encryptStringAsync(token));
+    fs.writeFileSync(tmp, data);
+    fs.renameSync(tmp, TOKEN_PATH);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* never written, or already gone */ }
+    throw err;
+  }
+}
+
+// Encrypts, then writes only if stillWanted() holds once encryption is done:
+// the check and the synchronous write can't be split by another save or clear.
+// Resolves true when written, false when the write was no longer wanted, and
+// null when encryption is unavailable; rejects when the write fails.
+async function encryptAndWrite(token, stillWanted) {
+  // safeStorage's synchronous calls are deprecated (Electron 45). The async
+  // ones decrypt what the old ones encrypted, so a token stored by an older
+  // build still reads.
+  if (!(await safeStorage.isAsyncEncryptionAvailable())) return null;
+  const data = await safeStorage.encryptStringAsync(token);
+  if (!stillWanted()) return false;
+  writeAtomic(data);
+  return true;
+}
+
+async function saveRefreshToken(token) {
+  const mine = ++generation;
+  try {
+    const written = await encryptAndWrite(token, () => generation === mine);
+    if (written === false) return false; // a later save or clear won
+    if (written) {
       connected = true;
       return true;
     }
@@ -52,7 +85,7 @@ async function saveRefreshToken(token) {
     return false;
   } catch (err) {
     console.error('Gmail: failed to store refresh token:', redact(err.message));
-    connected = false;
+    if (generation === mine) connected = false;
     return false;
   }
 }
@@ -79,6 +112,7 @@ function clearRefreshToken() {
   try {
     if (fs.existsSync(TOKEN_PATH)) fs.unlinkSync(TOKEN_PATH);
   } catch { /* nothing useful to do */ }
+  generation++;
   connected = false;
 }
 
@@ -86,11 +120,21 @@ function clearRefreshToken() {
 // Every later write to the file goes through saveRefreshToken() or
 // clearRefreshToken(), so the flag can't drift from what is stored.
 async function init() {
+  const seen = generation;
   const decrypted = await decryptStored();
+  // A Connect or Disconnect landed while this decrypted; it already set the
+  // flag from what is on disk now, which what was read here no longer is.
+  if (generation !== seen) return;
   connected = Boolean(decrypted);
-  // The key was rotated, or a stronger one is available. Rewriting here, before
-  // the service starts, can't race a reconnect that stores a new token.
-  if (decrypted && decrypted.shouldReEncrypt) await saveRefreshToken(decrypted.result);
+  if (!decrypted || !decrypted.shouldReEncrypt) return;
+  // The key was rotated, or a stronger one is available. The rewrite is
+  // optional: the old file still decrypts, so a failure leaves connected as it
+  // is. It is dropped if a save or clear lands while it encrypts.
+  try {
+    await encryptAndWrite(decrypted.result, () => generation === seen);
+  } catch (err) {
+    console.warn('Gmail: could not re-encrypt the refresh token:', redact(err.message));
+  }
 }
 
 function isConnected() {
